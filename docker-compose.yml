@@ -1,0 +1,15 @@
+
+
+version: '3.3'
+
+services:
+  app:
+    build:
+      context: .
+    ports:
+      - "3005:3005"
+    volumes:
+      - ./screenshots:/usr/src/app/screenshots
+      - ./index.json:/usr/src/app/index.json
+    environment:
+      - NODE_ENV=production

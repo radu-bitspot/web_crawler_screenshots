@@ -1,7 +1,7 @@
 
 
 # Use the official Node.js image.
-FROM node:18
+FROM node:19
 
 # Create and change to the app directory.
 WORKDIR /usr/src/app

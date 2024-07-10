@@ -1,5 +1,3 @@
-
-
 const puppeteer = require('puppeteer');
 const express = require('express');
 const bodyParser = require('body-parser');
@@ -21,26 +19,6 @@ const sanitizeFilename = (url) => {
   } catch (error) {
     console.error(`Invalid URL: ${url}`);
     return 'invalid_url';
-  }
-};
-
-// Helper function to take a screenshot with retry mechanism
-const takeScreenshot = async (page, url, translate, retries = 3) => {
-  const targetUrl = translate ? `https://translate.google.com/translate?hl=ro&sl=auto&tl=ro&u=${encodeURIComponent(url)}` : url;
-  for (let attempt = 1; attempt <= retries; attempt++) {
-    try {
-      await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 60000 }); // Increased timeout to 60 seconds
-      const sanitizedFilename = sanitizeFilename(url);
-      const screenshotPath = path.join(__dirname, 'screenshots', `screenshot-${sanitizedFilename}.png`);
-      await page.screenshot({ path: screenshotPath, fullPage: true });
-      console.log(`Screenshot taken for: ${url}`);
-      return screenshotPath;
-    } catch (error) {
-      console.error(`Attempt ${attempt} failed for URL: ${url}`);
-      if (attempt === retries) {
-        throw error;
-      }
-    }
   }
 };
 
@@ -100,12 +78,13 @@ app.post('/screenshot', async (req, res) => {
     archive.pipe(output);
 
     for (const url of urlList) {
-      try {
-        const screenshotPath = await takeScreenshot(page, url, translate);
-        archive.file(screenshotPath, { name: path.basename(screenshotPath) });
-      } catch (error) {
-        console.error(`Failed to take screenshot for: ${url}`);
-      }
+      const targetUrl = translate ? `https://translate.google.com/translate?hl=ro&sl=auto&tl=ro&u=${encodeURIComponent(url)}` : url;
+      await page.goto(targetUrl, { waitUntil: 'networkidle2' });
+      const sanitizedFilename = sanitizeFilename(url);
+      const screenshotPath = path.join(screenshotsDir, `screenshot-${sanitizedFilename}.png`);
+      await page.screenshot({ path: screenshotPath, fullPage: true });
+      console.log(`Screenshot taken for: ${url}`);
+      archive.file(screenshotPath, { name: path.basename(screenshotPath) });
     }
 
     await browser.close();
@@ -125,5 +104,3 @@ app.use('/screenshots', express.static(path.join(__dirname, 'screenshots')));
 app.listen(port, () => {
   console.log(`API listening at http://localhost:${port}`);
 });
-
-

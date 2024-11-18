@@ -25,7 +25,22 @@ const sanitizeFilename = (url) => {
 // Endpoint to take screenshots and create an archive
 app.post('/screenshot', async (req, res) => {
   const { urls } = req.body;
-  const translate = req.headers['translate-to-romanian'];
+
+  // Retrieve and normalize the 'translate-to-romanian' header value
+  const translateHeaderRaw = req.headers['translate-to-romanian'] || '';
+  const translateHeader = translateHeaderRaw.trim().toLowerCase();
+
+  console.log('translate-to-romanian header:', translateHeader);
+
+  let targetLang = null;
+  if (translateHeader === 'true') {
+    targetLang = 'ro'; // Translate to Romanian
+  } else if (translateHeader === 'false') {
+    targetLang = 'en'; // Translate to English
+  } else if (translateHeader) {
+    // If the header is set but not 'true' or 'false', return an error
+    return res.status(400).send({ error: 'Invalid translate-to-romanian header value. Use "true" or "false".' });
+  }
 
   // Check if URLs is a single string and split it
   let urlList = urls;
@@ -37,64 +52,76 @@ app.post('/screenshot', async (req, res) => {
     return res.status(400).send({ error: 'Invalid input' });
   }
 
-  try {
-    const browser = await puppeteer.launch({
-      args: ['--no-sandbox', '--disable-setuid-sandbox']
-    });
-    const page = await browser.newPage();
+  const browser = await puppeteer.launch({
+    args: ['--no-sandbox', '--disable-setuid-sandbox']
+  });
 
-    const screenshotsDir = path.join(__dirname, 'screenshots');
-    if (!fs.existsSync(screenshotsDir)) {
-      fs.mkdirSync(screenshotsDir);
+  const screenshotsDir = path.join(__dirname, 'screenshots');
+  if (!fs.existsSync(screenshotsDir)) {
+    fs.mkdirSync(screenshotsDir);
+  }
+
+  const domain = new URL(urlList[0]).hostname;
+  const archivePath = path.join(screenshotsDir, `${domain}.zip`);
+  const output = fs.createWriteStream(archivePath);
+  const archive = archiver('zip', { zlib: { level: 9 } });
+
+  output.on('close', () => {
+    console.log(`${archive.pointer()} total bytes`);
+    console.log(`Archive ${archivePath} has been finalized.`);
+  });
+
+  archive.on('error', (err) => {
+    console.error(`Archive error: ${err.message}`);
+    return res.status(500).send({ error: 'Error creating archive' });
+  });
+
+  archive.pipe(output);
+
+  try {
+    const page = await browser.newPage();
+    for (const url of urlList) {
+      let targetUrl = url;
+
+      // Handle translation if required
+      if (targetLang) {
+        targetUrl = `https://translate.google.com/translate?hl=${targetLang}&sl=auto&tl=${targetLang}&u=${encodeURIComponent(url)}`;
+      }
+
+      // Take a screenshot with error handling
+      try {
+        await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+        const sanitizedFilename = sanitizeFilename(url);
+        const screenshotPath = path.join(screenshotsDir, `screenshot-${sanitizedFilename}.png`);
+        await page.screenshot({ path: screenshotPath, fullPage: true });
+        console.log(`Screenshot taken for: ${url}`);
+        archive.file(screenshotPath, { name: path.basename(screenshotPath) });
+      } catch (err) {
+        console.error(`Failed to capture screenshot for ${url}: ${err.message}`);
+      }
     }
 
-    const domain = new URL(urlList[0]).hostname;
-    const archivePath = path.join(screenshotsDir, `${domain}.zip`);
-    const output = fs.createWriteStream(archivePath);
-    const archive = archiver('zip', {
-      zlib: { level: 9 }
-    });
+    await archive.finalize();
+    await browser.close();
 
-    output.on('close', () => {
-      console.log(`${archive.pointer()} total bytes`);
-      console.log(`Archive ${archivePath} has been finalized.`);
-      // Clean up the screenshot files
-      fs.readdir(screenshotsDir, (err, files) => {
-        if (err) throw err;
-        for (const file of files) {
-          if (file.endsWith('.png')) {
-            fs.unlink(path.join(screenshotsDir, file), err => {
-              if (err) throw err;
-            });
-          }
+    // Cleanup screenshot files after archiving
+    fs.readdir(screenshotsDir, (err, files) => {
+      if (err) console.error(`Error reading directory: ${err.message}`);
+      files.forEach(file => {
+        if (file.endsWith('.png')) {
+          fs.unlink(path.join(screenshotsDir, file), err => {
+            if (err) console.error(`Error deleting file: ${err.message}`);
+          });
         }
       });
     });
 
-    archive.on('error', (err) => {
-      throw err;
-    });
-
-    archive.pipe(output);
-
-    for (const url of urlList) {
-      const targetUrl = translate ? `https://translate.google.com/translate?hl=ro&sl=auto&tl=ro&u=${encodeURIComponent(url)}` : url;
-      await page.goto(targetUrl, { waitUntil: 'networkidle2' });
-      const sanitizedFilename = sanitizeFilename(url);
-      const screenshotPath = path.join(screenshotsDir, `screenshot-${sanitizedFilename}.png`);
-      await page.screenshot({ path: screenshotPath, fullPage: true });
-      console.log(`Screenshot taken for: ${url}`);
-      archive.file(screenshotPath, { name: path.basename(screenshotPath) });
-    }
-
-    await browser.close();
-    await archive.finalize();
-
     return res.status(200).send({ message: 'Screenshots and archive created successfully', archive: `${domain}.zip` });
 
   } catch (error) {
-    console.error(error);
-    return res.status(500).send({ error: 'An error occurred while taking screenshots and creating the archive' });
+    console.error(`Processing error: ${error.message}`);
+    await browser.close();
+    return res.status(500).send({ error: 'An error occurred while processing screenshots' });
   }
 });
 

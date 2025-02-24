@@ -3,7 +3,6 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const path = require('path');
 const fs = require('fs');
-const archiver = require('archiver');
 
 const app = express();
 const port = 3005;
@@ -76,7 +75,7 @@ const cleanupOldScreenshots = () => {
   
   try {
     const files = fs.readdirSync(screenshotsDir)
-      .filter(file => file.endsWith('.png') || file.endsWith('.zip'))
+      .filter(file => file.endsWith('.png'))
       .map(file => ({
         filename: file,
         path: path.join(screenshotsDir, file),
@@ -137,7 +136,7 @@ const cleanupOldScreenshots = () => {
 // Run cleanup every hour
 setInterval(cleanupOldScreenshots, 60 * 60 * 1000);
 
-// Endpoint to take screenshots and create an archive
+// Endpoint to take screenshots
 app.post('/screenshot', async (req, res) => {
   // Run cleanup before processing new screenshots
   cleanupOldScreenshots();
@@ -206,30 +205,6 @@ app.post('/screenshot', async (req, res) => {
   }
 
   try {
-    // Get domain from first valid URL
-    const domain = new URL(validUrls[0]).hostname;
-    console.log('Using domain:', domain);
-    
-    const timestamp = getTimestamp();
-    const archiveName = `${domain}-${timestamp}.zip`;
-    const archivePath = path.join(screenshotsDir, archiveName);
-    console.log('Archive path:', archivePath);
-    
-    const output = fs.createWriteStream(archivePath);
-    const archive = archiver('zip', { zlib: { level: 9 } });
-
-    output.on('close', () => {
-      console.log(`Archive completed: ${archive.pointer()} total bytes`);
-      console.log(`Archive ${archivePath} has been finalized.`);
-    });
-
-    archive.on('error', (err) => {
-      console.error(`Archive error: ${err.message}`);
-      return res.status(500).send({ error: 'Error creating archive' });
-    });
-
-    archive.pipe(output);
-
     const page = await browser.newPage();
     console.log('Browser page created');
 
@@ -261,28 +236,21 @@ app.post('/screenshot', async (req, res) => {
           filename: filename,
           screenshotUrl: `/screenshots/${filename}`,
           timestamp: new Date().toISOString(),
-          domain: domain
+          domain: new URL(url).hostname
         });
-
-        archive.file(screenshotPath, { name: filename });
       } catch (err) {
         console.error(`Failed to capture screenshot for ${url}: ${err.message}`);
       }
     }
 
-    console.log('Finalizing archive...');
-    await archive.finalize();
     await browser.close();
     console.log('Browser closed');
 
     console.log('Sending success response');
     return res.status(200).send({ 
       message: 'Screenshots created successfully',
-      archive: archiveName,
-      archiveUrl: `/screenshots/${archiveName}`,
       screenshots: screenshots
     });
-
   } catch (error) {
     console.error(`Processing error: ${error.message}`);
     await browser.close();
@@ -290,91 +258,76 @@ app.post('/screenshot', async (req, res) => {
   }
 });
 
-// GET endpoint to retrieve screenshot archive by domain
+// GET endpoint to retrieve screenshots by domain
 app.get('/screenshot/:domain', (req, res) => {
-  const { domain } = req.params;
+  let { domain } = req.params;
   
   if (!domain) {
     return res.status(400).send({ error: 'Domain parameter is required' });
   }
 
-  const screenshotsDir = path.join(__dirname, 'screenshots');
-  const archivePath = path.join(screenshotsDir, `${domain}.zip`);
+  // Normalize domain by removing protocol and trailing slashes
+  domain = domain.replace(/^https?:\/\//, '').replace(/\/$/, '');
+  
+  // Try different domain variations
+  const domainVariations = [
+    domain,
+    `www.${domain}`,
+    domain.replace(/^www\./, '')
+  ];
 
-  // Check if the archive exists
-  if (!fs.existsSync(archivePath)) {
-    return res.status(404).send({ error: 'No screenshots found for this domain' });
-  }
-
-  // Set headers for file download
-  res.setHeader('Content-Type', 'application/zip');
-  res.setHeader('Content-Disposition', `attachment; filename=${domain}.zip`);
-
-  // Stream the file to the response
-  const fileStream = fs.createReadStream(archivePath);
-  fileStream.pipe(res);
-});
-
-// Endpoint to list all screenshots, grouped by domain
-app.get('/screenshots/list', (req, res) => {
   const screenshotsDir = path.join(__dirname, 'screenshots');
   
-  if (!fs.existsSync(screenshotsDir)) {
-    return res.status(200).send({ screenshots: [] });
-  }
-
   try {
+    // Get all PNG files in the screenshots directory for any domain variation
     const files = fs.readdirSync(screenshotsDir)
-      .filter(file => file.endsWith('.png'))
-      .map(file => {
-        const stats = fs.statSync(path.join(screenshotsDir, file));
-        // Extract domain from filename (format: screenshot-domain-timestamp.png)
-        const parts = file.split('-');
-        const domain = parts[1]; // Get domain part
-        return {
-          filename: file,
-          url: `/screenshots/${file}`,
-          domain: domain,
-          created: stats.mtime,
-          size: stats.size
-        };
+      .filter(file => {
+        // Check if filename contains any of the domain variations
+        return file.endsWith('.png') && 
+               domainVariations.some(variation => file.includes(variation));
       })
-      .sort((a, b) => b.created - a.created); // Sort by creation date, newest first
+      .map(file => ({
+        filename: file,
+        url: `/screenshots/${file}`,
+        path: path.join(screenshotsDir, file),
+        stats: fs.statSync(path.join(screenshotsDir, file))
+      }))
+      .sort((a, b) => b.stats.mtime.getTime() - a.stats.mtime.getTime());
 
-    // Group screenshots by domain
-    const groupedScreenshots = files.reduce((groups, screenshot) => {
-      const domain = screenshot.domain;
-      if (!groups[domain]) {
-        groups[domain] = [];
-      }
-      groups[domain].push(screenshot);
-      return groups;
-    }, {});
+    if (files.length === 0) {
+      // Return more helpful error message with domain variations tried
+      return res.status(404).send({ 
+        error: 'No screenshots found for this domain',
+        message: `Tried looking for: ${domainVariations.join(', ')}`,
+        suggestion: 'Try using the exact domain: www.geima.it'
+      });
+    }
 
-    res.status(200).send({ 
-      screenshots: groupedScreenshots,
-      total: files.length
+    // Return list of screenshots
+    return res.status(200).send({
+      domain: domain,
+      screenshots: files.map(file => ({
+        filename: file.filename,
+        url: file.url,
+        timestamp: file.stats.mtime
+      }))
     });
   } catch (error) {
-    console.error('Error reading screenshots directory:', error);
-    res.status(500).send({ error: 'Failed to list screenshots' });
+    console.error(`Error retrieving screenshots: ${error}`);
+    res.status(500).send({ error: 'Internal server error' });
   }
-});
-
-// Endpoint to get a specific screenshot by filename
-app.get('/screenshot/:filename', (req, res) => {
-  const { filename } = req.params;
-  const screenshotPath = path.join(__dirname, 'screenshots', filename);
-
-  if (!fs.existsSync(screenshotPath)) {
-    return res.status(404).send({ error: 'Screenshot not found' });
-  }
-
-  res.sendFile(screenshotPath);
 });
 
 // Serve static files from the "screenshots" directory with proper headers
-app.use('/screenshots', express.static(path.join(__dirname, 'screenshots')));
+app.use('/screenshots', express.static(path.join(__dirname, 'screenshots'), {
+  setHeaders: (res, path) => {
+    // Set cache control for better performance
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    if (path.endsWith('.png')) {
+      res.setHeader('Content-Type', 'image/png');
+    }
+  }
+}));
 
 app.listen(port, () => {
   console.log(`API listening at http://localhost:${port}`);

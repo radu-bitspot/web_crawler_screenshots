@@ -107,9 +107,6 @@ app.post('/screenshot', async (req, res) => {
   }
 });
 
-// Serve static files from the "screenshots" directory
-app.use('/screenshots', express.static(path.join(__dirname, 'screenshots')));
-
 app.listen(port, () => {
   console.log(`API listening at http://localhost:${port}`);
 });

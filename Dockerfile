@@ -1,7 +1,5 @@
-
-
 # Use the official Node.js image.
-FROM node:19
+FROM node:20.9.0
 
 # Create and change to the app directory.
 WORKDIR /usr/src/app
@@ -45,4 +43,3 @@ EXPOSE 3005
 
 # Start the app.
 CMD ["node", "server.js"]
-

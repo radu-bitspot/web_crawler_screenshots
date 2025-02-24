@@ -1,5 +1,3 @@
-
-
 const puppeteer = require('puppeteer');
 const express = require('express');
 const bodyParser = require('body-parser');
@@ -16,8 +14,17 @@ app.use(bodyParser.json());
 const sanitizeFilename = (url) => {
   try {
     const { hostname, pathname } = new URL(url);
-    const sanitizedPath = pathname.replace(/[^a-z0-9]/gi, '_').toLowerCase();
-    return `${hostname}${sanitizedPath}`.replace(/_+/g, '_').replace(/^_+|_+$/g, '');
+    // Get the section from pathname (remove leading and trailing slashes)
+    const section = pathname.replace(/^\/|\/$/g, '');
+    
+    // Create a safe filename
+    if (!section || section === '') {
+      // This is homepage
+      return `${hostname}-homepage`;
+    } else {
+      // This is a section page
+      return `${hostname}-${section}`.replace(/[^a-z0-9-]/gi, '_');
+    }
   } catch (error) {
     console.error(`Invalid URL: ${url}`);
     return 'invalid_url';
@@ -106,4 +113,3 @@ app.use('/screenshots', express.static(path.join(__dirname, 'screenshots')));
 app.listen(port, () => {
   console.log(`API listening at http://localhost:${port}`);
 });
-

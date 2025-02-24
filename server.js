@@ -3,6 +3,7 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const path = require('path');
 const fs = require('fs');
+const archiver = require('archiver');
 
 const app = express();
 const port = 3005;
@@ -21,28 +22,35 @@ app.use((req, res, next) => {
   next();
 });
 
-// Helper function to generate timestamp
-const getTimestamp = () => {
-  return new Date().toISOString().replace(/[:.]/g, '-');
-};
-
-// Helper function to sanitize filenames
-const sanitizeFilename = (url) => {
+// Helper function to parse filename and get path info
+const parseFilename = (filename) => {
   try {
-    const { hostname, pathname } = new URL(url);
-    const sanitizedPath = pathname.replace(/[^a-z0-9]/gi, '_').toLowerCase();
-    return `${hostname}${sanitizedPath}`.replace(/_+/g, '_').replace(/^_+|_+$/g, '');
+    // Remove 'screenshot-' prefix and '.png' extension
+    const withoutPrefix = filename.replace(/^screenshot-/, '');
+    const withoutTimestamp = withoutPrefix.replace(/-\d{4}-\d{2}.*\.png$/, '');
+    
+    // Split remaining parts by underscore
+    const parts = withoutTimestamp.split('_');
+    const domain = parts[0];
+    
+    // Check if it's homepage (no additional parts) or a section
+    const isHomepage = parts.length === 1;
+    const section = isHomepage ? null : parts[1].replace('_html', '');
+    
+    return { domain, isHomepage, section };
   } catch (error) {
-    console.error(`Invalid URL: ${url}`);
-    return 'invalid_url';
+    console.error('Error parsing filename:', error);
+    return { domain: 'unknown', isHomepage: true, section: null };
   }
 };
 
 // Helper function to generate unique filename
 const generateUniqueFilename = (url) => {
-  const timestamp = getTimestamp();
-  const sanitized = sanitizeFilename(url);
-  return `screenshot-${sanitized}-${timestamp}.png`;
+  const { domain, isHomepage, section } = parseFilename(url);
+  if (isHomepage) {
+    return `screenshot-${domain}-homepage.png`;
+  }
+  return `screenshot-${domain}-${section}.png`;
 };
 
 // Configuration
@@ -318,14 +326,80 @@ app.get('/screenshot/:domain', (req, res) => {
   }
 });
 
+// Endpoint to list all domains with screenshots
+app.get('/domains', (req, res) => {
+  const screenshotsDir = path.join(__dirname, 'screenshots');
+  
+  try {
+    if (!fs.existsSync(screenshotsDir)) {
+      return res.json({ domains: [] });
+    }
+
+    const files = fs.readdirSync(screenshotsDir)
+      .filter(file => file.endsWith('.png'));
+
+    // Extract unique domains from filenames
+    const domains = [...new Set(files.map(file => {
+      // Assuming filename format: screenshot-domain-timestamp.png
+      const parts = file.split('-');
+      return parts[1]; // Get the domain part
+    }))];
+
+    res.json({ domains });
+  } catch (error) {
+    console.error('Error getting domains:', error);
+    res.status(500).json({ error: 'Failed to get domains' });
+  }
+});
+
+// Endpoint to download all screenshots as ZIP
+app.get('/download-all', (req, res) => {
+  const screenshotsDir = path.join(__dirname, 'screenshots');
+  
+  try {
+    if (!fs.existsSync(screenshotsDir)) {
+      return res.status(404).json({ error: 'No screenshots found' });
+    }
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const zipFilename = `screenshots-${timestamp}.zip`;
+    res.attachment(zipFilename);
+    
+    const archive = archiver('zip', { zlib: { level: 9 } });
+    archive.pipe(res);
+
+    const files = fs.readdirSync(screenshotsDir)
+      .filter(file => file.endsWith('.png'));
+
+    // Process each file and add it to the archive
+    files.forEach(file => {
+      const filePath = path.join(screenshotsDir, file);
+      const { domain, isHomepage, section } = parseFilename(file);
+      
+      let zipPath;
+      if (isHomepage) {
+        zipPath = `${domain}/homepage.png`;
+      } else {
+        zipPath = `${domain}/${section}/page.png`;
+      }
+
+      archive.file(filePath, { name: zipPath });
+    });
+
+    archive.finalize();
+  } catch (error) {
+    console.error('Error creating ZIP archive:', error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to create ZIP archive' });
+    }
+  }
+});
+
 // Serve static files from the "screenshots" directory with proper headers
 app.use('/screenshots', express.static(path.join(__dirname, 'screenshots'), {
   setHeaders: (res, path) => {
-    // Set cache control for better performance
-    res.setHeader('Cache-Control', 'public, max-age=3600');
-    if (path.endsWith('.png')) {
-      res.setHeader('Content-Type', 'image/png');
-    }
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('Content-Disposition', 'inline');
   }
 }));
 

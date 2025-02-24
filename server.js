@@ -146,9 +146,6 @@ setInterval(cleanupOldScreenshots, 60 * 60 * 1000);
 
 // Endpoint to take screenshots
 app.post('/screenshot', async (req, res) => {
-  // Run cleanup before processing new screenshots
-  cleanupOldScreenshots();
-
   console.log('Received POST request to /screenshot');
   console.log('Request body:', req.body);
   
@@ -201,16 +198,16 @@ app.post('/screenshot', async (req, res) => {
     return res.status(400).send({ error: 'No valid URLs provided' });
   }
 
-  console.log('Launching browser...');
-  const browser = await puppeteer.launch({
-    args: ['--no-sandbox', '--disable-setuid-sandbox']
-  });
-
   const screenshotsDir = path.join(__dirname, 'screenshots');
   if (!fs.existsSync(screenshotsDir)) {
     console.log('Creating screenshots directory...');
     fs.mkdirSync(screenshotsDir);
   }
+
+  console.log('Launching browser...');
+  const browser = await puppeteer.launch({
+    args: ['--no-sandbox', '--disable-setuid-sandbox']
+  });
 
   try {
     const page = await browser.newPage();
@@ -254,15 +251,15 @@ app.post('/screenshot', async (req, res) => {
     await browser.close();
     console.log('Browser closed');
 
-    console.log('Sending success response');
-    return res.status(200).send({ 
-      message: 'Screenshots created successfully',
+    // Send success response with screenshot info
+    res.status(200).send({
+      message: 'Screenshots taken successfully',
       screenshots: screenshots
     });
   } catch (error) {
-    console.error(`Processing error: ${error.message}`);
+    console.error('Error:', error);
     await browser.close();
-    return res.status(500).send({ error: 'An error occurred while processing screenshots' });
+    res.status(500).send({ error: 'An error occurred while taking screenshots' });
   }
 });
 

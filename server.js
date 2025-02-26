@@ -242,7 +242,28 @@ if (cluster.isMaster) {
       }
 
       console.log(`Navigating to: ${targetUrl}`);
-      await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+      // Wait for the page to load with a longer timeout
+      await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+      
+      // Additional waiting to ensure page is fully loaded
+      console.log(`Waiting for page to be fully loaded...`);
+      
+      // Wait for any remaining network activity to complete
+      await page.waitForNetworkIdle({ idleTime: 1000 }).catch(e => console.log('Network idle timeout, continuing anyway'));
+      
+      // Wait for any animations or delayed content to finish loading (2 seconds)
+      await page.waitForTimeout(2000);
+      
+      // Ensure all images and other resources are loaded
+      await page.evaluate(() => {
+        return new Promise((resolve) => {
+          if (document.readyState === 'complete') {
+            return resolve();
+          }
+          window.addEventListener('load', resolve);
+        });
+      });
+      
       const filename = generateUniqueFilename(url);
       const screenshotPath = path.join(screenshotsDir, filename);
       console.log(`Taking screenshot: ${screenshotPath}`);

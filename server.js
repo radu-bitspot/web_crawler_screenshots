@@ -44,13 +44,34 @@ const parseFilename = (filename) => {
   }
 };
 
+// Helper function to sanitize filenames
+const sanitizeFilename = (url) => {
+  try {
+    const { hostname, pathname } = new URL(url);
+    // Get the section from pathname (remove leading and trailing slashes)
+    const section = pathname.replace(/^\/|\/$/g, '');
+    
+    // Create a safe filename by removing invalid characters
+    if (!section || section === '') {
+      // This is homepage
+      return hostname.replace(/[^a-z0-9-]/gi, '_');
+    } else {
+      // This is a section page
+      return `${hostname}-${section}`.replace(/[^a-z0-9-]/gi, '_');
+    }
+  } catch (error) {
+    console.error(`Invalid URL: ${url}`);
+    return 'invalid_url';
+  }
+};
+
 // Helper function to generate unique filename
 const generateUniqueFilename = (url) => {
-  const { domain, isHomepage, section } = parseFilename(url);
-  if (isHomepage) {
-    return `screenshot-${domain}-homepage.png`;
+  const sanitized = sanitizeFilename(url);
+  if (sanitized === 'invalid_url') {
+    return `screenshot-invalid-url-${Date.now()}.png`;
   }
-  return `screenshot-${domain}-${section}.png`;
+  return `screenshot-${sanitized}.png`;
 };
 
 // Configuration
@@ -335,11 +356,11 @@ app.get('/domains', (req, res) => {
     const files = fs.readdirSync(screenshotsDir)
       .filter(file => file.endsWith('.png'));
 
-    // Extract unique domains from filenames
+    // Extract unique domains from filenames using parseFilename helper
     const domains = [...new Set(files.map(file => {
-      // Assuming filename format: screenshot-domain-timestamp.png
-      const parts = file.split('-');
-      return parts[1]; // Get the domain part
+      // Use the parseFilename helper function to correctly extract domain
+      const { domain } = parseFilename(file);
+      return domain;
     }))];
 
     res.json({ domains });

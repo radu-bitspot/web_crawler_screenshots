@@ -242,17 +242,17 @@ if (cluster.isMaster) {
       }
 
       console.log(`Navigating to: ${targetUrl}`);
-      // Wait for the page to load with a longer timeout
-      await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+      // Wait for the page to load with a longer timeout and multiple conditions
+      await page.goto(targetUrl, { 
+        waitUntil: ['networkidle0', 'domcontentloaded', 'load'],
+        timeout: 60000 
+      });
       
       // Additional waiting to ensure page is fully loaded
       console.log(`Waiting for page to be fully loaded...`);
       
-      // Wait for any remaining network activity to complete
-      await page.waitForNetworkIdle({ idleTime: 1000 }).catch(e => console.log('Network idle timeout, continuing anyway'));
-      
       // Wait for any animations or delayed content to finish loading (2 seconds)
-      await page.waitForTimeout(2000);
+      await new Promise(resolve => setTimeout(resolve, 2000));
       
       // Ensure all images and other resources are loaded
       await page.evaluate(() => {
@@ -277,7 +277,8 @@ if (cluster.isMaster) {
         filename: filename,
         screenshotUrl: `/screenshots/${filename}`,
         timestamp: new Date().toISOString(),
-        domain: new URL(url).hostname
+        domain: new URL(url).hostname,
+        path: new URL(url).pathname || '/'
       };
     } catch (err) {
       console.error(`Failed to capture screenshot for ${url}: ${err.message}`);
@@ -360,7 +361,26 @@ if (cluster.isMaster) {
       const results = await Promise.all(screenshotPromises);
       
       // Filter out null results (failed screenshots)
-      const screenshots = results.filter(result => result !== null);
+      const screenshots = results.filter(result => result !== null).map(result => {
+        // Extract page type information
+        let pageType = 'Homepage';
+        const url = new URL(result.originalUrl);
+        if (url.pathname && url.pathname !== '/' && url.pathname !== '') {
+          // Get the last part of the path for a more descriptive name
+          const pathParts = url.pathname.split('/').filter(p => p);
+          pageType = pathParts.length > 0 ? pathParts[pathParts.length - 1] : 'Section';
+          
+          // Capitalize and clean up the page type
+          pageType = pageType
+            .replace(/-/g, ' ')
+            .replace(/\b\w/g, l => l.toUpperCase());
+        }
+        
+        return {
+          ...result,
+          pageType
+        };
+      });
 
       console.log(`Worker ${process.pid} completed processing ${screenshots.length} screenshots`);
 
@@ -423,11 +443,37 @@ if (cluster.isMaster) {
       // Return list of screenshots
       return res.status(200).send({
         domain: domain,
-        screenshots: files.map(file => ({
-          filename: file.filename,
-          url: file.url,
-          timestamp: file.stats.mtime
-        }))
+        screenshots: files.map(file => {
+          // Extract URL path from filename to determine page type
+          let pageType = 'Homepage';
+          const filenameWithoutPrefix = file.filename.replace(/^screenshot-/, '');
+          
+          // Check if the filename contains a section indicator (has a hyphen after domain)
+          if (filenameWithoutPrefix.includes('-')) {
+            const parts = filenameWithoutPrefix.split('-');
+            if (parts.length > 1) {
+              // Get everything after the first part (domain)
+              const section = parts.slice(1).join('-').replace(/\.png$/, '');
+              
+              // Clean up timestamp if present
+              const sectionWithoutTimestamp = section.replace(/-\d{4}-\d{2}.*$/, '');
+              
+              if (sectionWithoutTimestamp) {
+                // Format the section name nicely
+                pageType = sectionWithoutTimestamp
+                  .replace(/-/g, ' ')
+                  .replace(/\b\w/g, l => l.toUpperCase());
+              }
+            }
+          }
+          
+          return {
+            filename: file.filename,
+            url: file.url,
+            timestamp: file.stats.mtime,
+            pageType: pageType
+          };
+        })
       });
     } catch (error) {
       console.error(`Error retrieving screenshots: ${error}`);
@@ -444,17 +490,93 @@ if (cluster.isMaster) {
         return res.json({ domains: [] });
       }
 
+      // Get all PNG files in the screenshots directory
       const files = fs.readdirSync(screenshotsDir)
-        .filter(file => file.endsWith('.png'));
+        .filter(file => file.endsWith('.png'))
+        .map(file => ({
+          filename: file,
+          path: path.join(screenshotsDir, file),
+          url: `/screenshots/${file}`,
+          stats: fs.statSync(path.join(screenshotsDir, file))
+        }));
 
-      // Extract unique domains from filenames using parseFilename helper
-      const domains = [...new Set(files.map(file => {
-        // Use the parseFilename helper function to correctly extract domain
-        const { domain } = parseFilename(file);
-        return domain;
-      }))];
+      // Create a map to organize domains, subdomains, and their screenshots
+      const domainMap = {};
 
-      res.json({ domains });
+      // Process each file to extract domain information and organize screenshots
+      files.forEach(file => {
+        // Use the parseFilename helper function to extract domain
+        const { domain: extractedDomain, isHomepage, section } = parseFilename(file.filename);
+        
+        // Skip if domain extraction failed
+        if (!extractedDomain || extractedDomain === 'unknown') return;
+        
+        // Split the domain by dots to identify parts
+        const parts = extractedDomain.split('.');
+        
+        // Determine if this is a subdomain or main domain
+        let mainDomain, subdomain;
+        
+        if (parts.length >= 2) {
+          // Get the main domain (last two parts, e.g., example.com)
+          mainDomain = parts.slice(-2).join('.');
+          
+          // If there are more than 2 parts, it's a subdomain
+          subdomain = parts.length > 2 ? extractedDomain : null;
+        } else {
+          // Handle single-part domains (rare, but possible in local environments)
+          mainDomain = extractedDomain;
+          subdomain = null;
+        }
+        
+        // Initialize the main domain entry if it doesn't exist
+        if (!domainMap[mainDomain]) {
+          domainMap[mainDomain] = {
+            name: mainDomain,
+            subdomains: [],
+            screenshots: []
+          };
+        }
+        
+        // Extract page type information
+        let pageType = 'Homepage';
+        if (!isHomepage && section) {
+          pageType = section
+            .replace(/-/g, ' ')
+            .replace(/\b\w/g, l => l.toUpperCase());
+        }
+        
+        // Create screenshot object with all relevant information
+        const screenshot = {
+          filename: file.filename,
+          url: file.url,
+          timestamp: file.stats.mtime,
+          pageType: pageType,
+          domain: extractedDomain
+        };
+        
+        // Add screenshot to the main domain
+        domainMap[mainDomain].screenshots.push(screenshot);
+        
+        // If this is a subdomain, add it to the subdomains list if not already there
+        if (subdomain && !domainMap[mainDomain].subdomains.includes(subdomain)) {
+          domainMap[mainDomain].subdomains.push(subdomain);
+        }
+      });
+
+      // Convert map to array for response
+      const domainsWithScreenshots = Object.values(domainMap)
+        // Sort domains alphabetically
+        .sort((a, b) => a.name.localeCompare(b.name))
+        // Sort screenshots by timestamp (newest first)
+        .map(domain => ({
+          ...domain,
+          screenshots: domain.screenshots.sort((a, b) => 
+            new Date(b.timestamp) - new Date(a.timestamp)
+          )
+        }));
+
+      res.json({ domains: domainsWithScreenshots });
     } catch (error) {
       console.error('Error getting domains:', error);
       res.status(500).json({ error: 'Failed to get domains' });
@@ -483,15 +605,38 @@ if (cluster.isMaster) {
       // Process each file and add it to the archive
       files.forEach(file => {
         const filePath = path.join(screenshotsDir, file);
-        const { domain, isHomepage, section } = parseFilename(file);
+        
+        // Extract domain and section from filename
+        const filenameWithoutPrefix = file.replace(/^screenshot-/, '');
+        let domain, section;
+        
+        // Split by hyphen to get domain and section
+        const parts = filenameWithoutPrefix.split('-');
+        domain = parts[0];
+        
+        // Determine if this is a homepage or section page
+        let isHomepage = parts.length === 1;
+        
+        // If there are more parts, it's likely a section page
+        if (!isHomepage) {
+          // Join all parts after the domain, but remove any timestamp
+          section = parts.slice(1).join('-').replace(/\.png$/, '').replace(/-\d{4}-\d{2}.*$/, '');
+          // If section is empty after cleaning, treat as homepage
+          isHomepage = !section;
+        }
+        
+        // Create a nice section name for display
+        const sectionDisplay = section ? section.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) : null;
         
         let zipPath;
         if (isHomepage) {
-          zipPath = `${domain}/homepage.png`;
+          zipPath = `${domain}/index.png`;
         } else {
-          zipPath = `${domain}/${section}/page.png`;
+          // Create a more descriptive filename based on the section
+          zipPath = `${domain}/${section}.png`;
         }
-
+        
+        console.log(`Adding to archive: ${file} as ${zipPath}`);
         archive.file(filePath, { name: zipPath });
       });
 

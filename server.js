@@ -242,13 +242,41 @@ if (cluster.isMaster) {
       }
 
       console.log(`Navigating to: ${targetUrl}`);
-      // Wait for the page to load with a longer timeout and multiple conditions
-      await page.goto(targetUrl, { 
-        waitUntil: ['networkidle0', 'domcontentloaded', 'load'],
-        timeout: 60000 
-      });
       
-      // Additional waiting to ensure page is fully loaded
+      // First try: Normal load with 6 second timeout
+      try {
+        await page.goto(targetUrl, { 
+          waitUntil: ['networkidle0', 'domcontentloaded', 'load'],
+          timeout: 6000 // 6 second timeout
+        });
+      } catch (initialLoadError) {
+        console.log(`Page load taking longer than 6 seconds, applying optimizations...`);
+        
+        // Apply performance optimizations
+        await page.setRequestInterception(true);
+        page.on('request', (request) => {
+          const resourceType = request.resourceType();
+          if (['media'].includes(resourceType)) {
+            request.abort();
+          } else {
+            request.continue();
+          }
+        });
+
+        // Retry with optimizations and longer timeout
+        const pageLoadPromise = page.goto(targetUrl, { 
+          waitUntil: 'networkidle2',
+          timeout: 30000 // 30 second timeout
+        });
+
+        try {
+          await pageLoadPromise;
+        } catch (error) {
+          console.log(`Page load timed out for ${targetUrl}, continuing with capture...`);
+        }
+      }
+
+      // Ensure page is fully loaded
       console.log(`Waiting for page to be fully loaded...`);
       
       // Wait for any animations or delayed content to finish loading (2 seconds)

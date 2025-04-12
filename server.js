@@ -50,42 +50,69 @@ if (cluster.isMaster) {
     next();
   });
 
-  // Helper function to parse filename and get path info
+  // Helper function to parse filename and get path info (revised)
   const parseFilename = (filename) => {
     try {
-      // Remove 'screenshot-' prefix and '.png' extension
-      const withoutPrefix = filename.replace(/^screenshot-/, '');
-      const withoutTimestamp = withoutPrefix.replace(/-\d{4}-\d{2}.*\.png$/, '');
-      
-      // Split remaining parts by underscore
-      const parts = withoutTimestamp.split('_');
-      const domain = parts[0];
-      
-      // Check if it's homepage (no additional parts) or a section
-      const isHomepage = parts.length === 1;
-      const section = isHomepage ? null : parts[1].replace('_html', '');
-      
-      return { domain, isHomepage, section };
+      // Expected format: screenshot-${domain}[__${section}]-${timestamp}.png
+      // Example: screenshot-example.com__section-name-2023-10-27T10-30-00-000Z.png
+      // Example: screenshot-example.com-2023-10-27T10-30-00-000Z.png
+
+      // Remove prefix and suffix
+      const base = filename.replace(/^screenshot-/, '').replace(/\.png$/, '');
+
+      // Find the last hyphen sequence that looks like an ISO timestamp
+      const timestampMatch = base.match(/(.*)-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)$/);
+
+      if (!timestampMatch) {
+        // Fallback if no timestamp is found (e.g., old files or different format)
+        console.warn(`Could not parse standard timestamp from filename: ${filename}. Attempting fallback parsing.`);
+        // Assume content is split by '__' if present, otherwise it's just domain
+        const parts = base.split('__');
+        const domain = parts[0];
+        const section = parts.length > 1 ? parts.slice(1).join('__') : null;
+        // Return best guess, domain might be inaccurate if it contained '__'
+        return { domain: domain || 'unknown', isHomepage: !section, section: section };
+      }
+
+      const contentPart = timestampMatch[1]; // Part before the timestamp: domain or domain__section
+      const timestamp = timestampMatch[2]; // The timestamp string
+
+      // Split the content part by double underscore to separate domain and section
+      const parts = contentPart.split('__');
+      const domain = parts[0]; // Should be the full domain, e.g., 'example.com' or 'sub.example.co.uk'
+      const section = parts.length > 1 ? parts.slice(1).join('__') : null; // Section part, if present
+
+      return { domain, isHomepage: !section, section };
+
     } catch (error) {
-      console.error('Error parsing filename:', error);
+      console.error('Error parsing filename:', error, filename);
+      // Return default structure on error
       return { domain: 'unknown', isHomepage: true, section: null };
     }
   };
 
-  // Helper function to sanitize filenames
+  // Helper function to sanitize filenames (revised)
   const sanitizeFilename = (url) => {
     try {
       const { hostname, pathname } = new URL(url);
+      // Remove www. prefix from hostname
+      const cleanHostname = hostname.replace(/^www\./i, '');
+      // Sanitize hostname: allow letters, numbers, hyphens, dots
+      // Replace any other characters with underscore
+      const sanitizedHostname = cleanHostname.replace(/[^a-z0-9.-]/gi, '_').replace(/__+/g, '_'); // Avoid double underscore
+
       // Get the section from pathname (remove leading and trailing slashes)
       const section = pathname.replace(/^\/|\/$/g, '');
-      
-      // Create a safe filename by removing invalid characters
-      if (!section || section === '') {
+      // Sanitize section: allow letters, numbers, hyphens
+      const sanitizedSection = section.replace(/[^a-z0-9-]/gi, '_').replace(/__+/g, '_'); // Avoid double underscore
+
+      // Create a base filename part
+      if (!sanitizedSection || sanitizedSection === '') {
         // This is homepage
-        return hostname.replace(/[^a-z0-9-]/gi, '_');
+        return sanitizedHostname; // Return just the sanitized hostname
       } else {
-        // This is a section page
-        return `${hostname}-${section}`.replace(/[^a-z0-9-]/gi, '_');
+        // This is a section page, use double underscore as separator
+        return `${sanitizedHostname}__${sanitizedSection}`;
       }
     } catch (error) {
       console.error(`Invalid URL: ${url}`);
@@ -93,13 +120,16 @@ if (cluster.isMaster) {
     }
   };
 
-  // Helper function to generate unique filename
+  // Helper function to generate unique filename (revised: adds timestamp)
   const generateUniqueFilename = (url) => {
-    const sanitized = sanitizeFilename(url);
-    if (sanitized === 'invalid_url') {
+    const sanitizedBase = sanitizeFilename(url);
+    if (sanitizedBase === 'invalid_url') {
+      // Add timestamp to invalid URLs too for uniqueness
       return `screenshot-invalid-url-${Date.now()}.png`;
     }
-    return `screenshot-${sanitized}.png`;
+    // Add timestamp separated by a single hyphen to ensure uniqueness and help with sorting/cleanup
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    return `screenshot-${sanitizedBase}-${timestamp}.png`;
   };
 
   // Configuration
@@ -123,63 +153,119 @@ if (cluster.isMaster) {
     return size;
   };
 
-  // Helper function to clean up old screenshots
+  // Helper function to clean up old screenshots (revised)
   const cleanupOldScreenshots = () => {
     const screenshotsDir = path.join(__dirname, 'screenshots');
     if (!fs.existsSync(screenshotsDir)) return;
 
     console.log('Starting screenshots cleanup...');
-    
+
     try {
-      const files = fs.readdirSync(screenshotsDir)
+      // Read all files and parse info using the new parser
+      const allFiles = fs.readdirSync(screenshotsDir)
         .filter(file => file.endsWith('.png'))
-        .map(file => ({
-          filename: file,
-          path: path.join(screenshotsDir, file),
-          stats: fs.statSync(path.join(screenshotsDir, file))
-        }))
-        .sort((a, b) => b.stats.mtime.getTime() - a.stats.mtime.getTime());
+        .map(file => {
+          const filePath = path.join(screenshotsDir, file);
+          const fileInfo = parseFilename(file); // Use the improved parser
+          try {
+            const stats = fs.statSync(filePath);
+            return {
+              filename: file,
+              domain: fileInfo.domain, // Get domain from parser
+              path: filePath,
+              stats: stats
+            };
+          } catch (statError) {
+              console.error(`Could not get stats for file ${filePath}: ${statError.message}`);
+              return null; // Indicate failure to get stats
+          }
+        })
+        .filter(file => file !== null && file.domain !== 'unknown') // Filter out stat errors and unparseable files
+        .sort((a, b) => b.stats.mtime.getTime() - a.stats.mtime.getTime()); // Newest first
 
-      // Group screenshots by domain
+      // Group screenshots by the parsed domain
       const domainGroups = {};
-      for (const file of files) {
-        const domain = file.filename.split('-')[1]; // Get domain from filename
-        if (!domainGroups[domain]) {
-          domainGroups[domain] = [];
+      for (const file of allFiles) {
+        if (!domainGroups[file.domain]) {
+          domainGroups[file.domain] = [];
         }
-        domainGroups[domain].push(file);
+        domainGroups[file.domain].push(file);
       }
 
-      // Keep only the most recent screenshots per domain
+      const filesToRemove = new Set();
+
+      // 1. Identify files exceeding the max count per domain
       for (const domain in domainGroups) {
-        const domainFiles = domainGroups[domain];
-        const filesToRemove = domainFiles.slice(config.maxScreenshotsPerDomain);
-        
-        for (const file of filesToRemove) {
-          console.log(`Removing old file: ${file.filename}`);
-          fs.unlinkSync(file.path);
-        }
+        const domainFiles = domainGroups[domain]; // Already sorted newest first
+        const filesExceedingLimit = domainFiles.slice(config.maxScreenshotsPerDomain);
+        filesExceedingLimit.forEach(f => {
+          console.log(`Marking for removal (exceeds max ${config.maxScreenshotsPerDomain} for ${domain}): ${f.filename}`);
+          filesToRemove.add(f.filename);
+        });
       }
 
-      // Remove files older than retention period
+      // 2. Identify files older than the retention period
       const cutoffDate = new Date();
       cutoffDate.setDate(cutoffDate.getDate() - config.screenshotRetentionDays);
 
-      files.forEach(file => {
-        if (file.stats.mtime.getTime() < cutoffDate.getTime()) {
-          console.log(`Removing expired file: ${file.filename}`);
-          fs.unlinkSync(file.path);
+      allFiles.forEach(file => {
+        // Add to removal if it's older than retention cutoff AND not already marked
+        if (file.stats.mtime.getTime() < cutoffDate.getTime() && !filesToRemove.has(file.filename)) {
+          console.log(`Marking for removal (older than ${config.screenshotRetentionDays} days): ${file.filename}`);
+          filesToRemove.add(file.filename);
         }
       });
 
-      // Check total storage size
-      const totalSize = getDirSize(screenshotsDir);
-      if (totalSize > config.maxStorageSize) {
-        console.log('Storage limit exceeded, removing oldest files...');
-        for (const file of files) {
-          fs.unlinkSync(file.path);
-          if (getDirSize(screenshotsDir) <= config.maxStorageSize) {
-            break;
+      // 3. Perform deletions
+      let deletedSize = 0;
+      filesToRemove.forEach(filename => {
+          try {
+              const file = allFiles.find(f => f.filename === filename); // Find full file info
+              if (file) {
+                   fs.unlinkSync(file.path);
+                   deletedSize += file.stats.size; // Track size removed
+              }
+          } catch (unlinkError) {
+              console.error(`Error removing file ${filename}: ${unlinkError.message}`);
+          }
+      });
+      if (filesToRemove.size > 0) {
+          console.log(`Removed ${filesToRemove.size} files based on retention/count limits.`);
+      }
+
+
+      // 4. Check storage size limit and remove oldest if needed
+      let currentSize = 0;
+      const remainingFiles = fs.readdirSync(screenshotsDir)
+         .filter(file => file.endsWith('.png'))
+         .map(file => {
+             try {
+                const filePath = path.join(screenshotsDir, file);
+                const stats = fs.statSync(filePath);
+                return { path: filePath, stats: stats };
+             } catch (statError) {
+                console.error(`Could not get stats for remaining file ${file}: ${statError.message}`);
+                return null;
+             }
+          })
+         .filter(file => file !== null)
+         .sort((a, b) => a.stats.mtime.getTime() - b.stats.mtime.getTime()); // Sort oldest first
+
+      remainingFiles.forEach(file => currentSize += file.stats.size);
+
+      if (currentSize > config.maxStorageSize) {
+        console.log(`Storage limit still exceeded (${(currentSize / (1024*1024)).toFixed(2)}MB > ${(config.maxStorageSize / (1024*1024)).toFixed(2)}MB), removing oldest files...`);
+        for (const file of remainingFiles) { // Iterate oldest first
+          try {
+            console.log(`Removing oldest file due to size limit: ${path.basename(file.path)}`);
+            fs.unlinkSync(file.path);
+            currentSize -= file.stats.size;
+            if (currentSize <= config.maxStorageSize) {
+              console.log(`Storage size now below limit.`);
+              break; // Stop removing once under the limit
+            }
+          } catch (unlinkError) {
+             console.error(`Error removing file ${path.basename(file.path)} for size limit: ${unlinkError.message}`);
           }
         }
       }
@@ -242,28 +328,62 @@ if (cluster.isMaster) {
       }
 
       console.log(`Navigating to: ${targetUrl}`);
-      // Wait for the page to load with a longer timeout and multiple conditions
-      await page.goto(targetUrl, { 
-        waitUntil: ['networkidle0', 'domcontentloaded', 'load'],
-        timeout: 60000 
-      });
       
-      // Additional waiting to ensure page is fully loaded
+      // First try: Normal load with 6 second timeout
+      try {
+        await page.goto(targetUrl, { 
+          waitUntil: ['networkidle0', 'domcontentloaded', 'load'],
+          timeout: 6000 // 6 second timeout
+        });
+      } catch (initialLoadError) {
+        console.log(`Page load taking longer than 6 seconds, applying optimizations...`);
+        
+        // Apply performance optimizations
+        await page.setRequestInterception(true);
+        page.on('request', (request) => {
+          const resourceType = request.resourceType();
+          if (['media'].includes(resourceType)) {
+            request.abort();
+          } else {
+            request.continue();
+          }
+        });
+
+        // Retry with optimizations and longer timeout
+        const pageLoadPromise = page.goto(targetUrl, { 
+          waitUntil: 'networkidle2',
+          timeout: 30000 // 30 second timeout
+        });
+
+        try {
+          await pageLoadPromise;
+        } catch (error) {
+          console.log(`Page load timed out for ${targetUrl}, continuing with capture...`);
+        }
+      }
+
+      // Ensure page is fully loaded
       console.log(`Waiting for page to be fully loaded...`);
       
-      // Wait for any animations or delayed content to finish loading (2 seconds)
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      // Ensure all images and other resources are loaded
-      await page.evaluate(() => {
-        return new Promise((resolve) => {
-          if (document.readyState === 'complete') {
-            return resolve();
-          }
-          window.addEventListener('load', resolve);
+      // Scroll through the page to ensure all lazy-loaded content is loaded
+      await page.evaluate(async () => {
+        await new Promise((resolve) => {
+          let totalHeight = 0;
+          const distance = 100;
+          const timer = setInterval(() => {
+            const scrollHeight = document.body.scrollHeight;
+            window.scrollBy(0, distance);
+            totalHeight += distance;
+
+            if (totalHeight >= scrollHeight) {
+              clearInterval(timer);
+              window.scrollTo(0, 0);
+              resolve();
+            }
+          }, 100);
         });
       });
-      
+
       const filename = generateUniqueFilename(url);
       const screenshotPath = path.join(screenshotsDir, filename);
       console.log(`Taking screenshot: ${screenshotPath}`);
@@ -352,7 +472,7 @@ if (cluster.isMaster) {
     }
 
     try {
-      // Process URLs in parallel with a concurrency limit
+      // Process URLs in parallel with Promise.all
       const screenshotPromises = validUrls.map(url => 
         processUrl(url, targetLang, screenshotsDir)
       );
@@ -395,183 +515,152 @@ if (cluster.isMaster) {
     }
   });
 
-  // GET endpoint to retrieve screenshots by domain
+  // GET endpoint to retrieve screenshots by domain (revised)
   app.get('/screenshot/:domain', (req, res) => {
-    let { domain } = req.params;
-    
-    if (!domain) {
+    let { domain: requestedDomain } = req.params; // Original request parameter
+
+    if (!requestedDomain) {
       return res.status(400).send({ error: 'Domain parameter is required' });
     }
 
-    // Normalize domain by removing protocol and trailing slashes
-    domain = domain.replace(/^https?:\/\//, '').replace(/\/$/, '');
-    
-    // Try different domain variations
-    const domainVariations = [
-      domain,
-      `www.${domain}`,
-      domain.replace(/^www\./, '')
-    ];
+    // Normalize the requested domain: lowercase, remove protocol, remove trailing slash, remove www.
+    let normalizedDomain = requestedDomain
+                            .toLowerCase()
+                            .replace(/^https?:\/\//, '')
+                            .replace(/\/$/, '')
+                            .replace(/^www\./, '');
 
     const screenshotsDir = path.join(__dirname, 'screenshots');
-    
+
     try {
-      // Get all PNG files in the screenshots directory for any domain variation
+      if (!fs.existsSync(screenshotsDir)) {
+         return res.status(404).send({ error: 'No screenshots found (screenshot directory does not exist)' });
+      }
+
+      // Get all PNG files, parse their info, and filter by the normalized domain
       const files = fs.readdirSync(screenshotsDir)
-        .filter(file => {
-          // Check if filename contains any of the domain variations
-          return file.endsWith('.png') && 
-                 domainVariations.some(variation => file.includes(variation));
+        .filter(file => file.endsWith('.png'))
+        .map(file => {
+           // Parse the filename to get the domain associated with this specific file
+           const fileInfo = parseFilename(file);
+           if (fileInfo.domain === 'unknown') return null; // Skip unparseable files
+
+           try {
+               const stats = fs.statSync(path.join(screenshotsDir, file));
+               // Format the page type nicely from the section name
+               let pageType = 'Homepage';
+               if (!fileInfo.isHomepage && fileInfo.section) {
+                   pageType = fileInfo.section
+                       .replace(/_/g, ' ') // Replace underscores used in sanitization back to spaces
+                       .replace(/\b\w/g, l => l.toUpperCase()); // Capitalize words
+               }
+
+               return {
+                 filename: file,
+                 fileDomain: fileInfo.domain, // The actual domain stored in the filename
+                 url: `/screenshots/${file}`,
+                 timestamp: stats.mtime,
+                 pageType: pageType
+               };
+           } catch (statError) {
+              console.error(`Could not get stats for screenshot file ${file}: ${statError.message}`);
+              return null; // Skip files we can't get stats for
+           }
         })
-        .map(file => ({
-          filename: file,
-          url: `/screenshots/${file}`,
-          path: path.join(screenshotsDir, file),
-          stats: fs.statSync(path.join(screenshotsDir, file))
-        }))
-        .sort((a, b) => b.stats.mtime.getTime() - a.stats.mtime.getTime());
+        .filter(file => file !== null && file.fileDomain === normalizedDomain) // Filter where file's domain matches the *normalized* requested domain
+        .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)); // Sort by timestamp newest first
 
       if (files.length === 0) {
-        // Return more helpful error message with domain variations tried
-        return res.status(404).send({ 
+        return res.status(404).send({
           error: 'No screenshots found for this domain',
-          message: `Tried looking for: ${domainVariations.join(', ')}`,
-          suggestion: 'Try using the exact domain: www.geima.it'
+          message: `Looked for screenshots matching domain: ${normalizedDomain}`,
+          suggestion: `Ensure screenshots were previously submitted with a URL resolving to this hostname (e.g., https://${normalizedDomain} or https://www.${normalizedDomain}).`
         });
       }
 
-      // Return list of screenshots
+      // Return list of screenshots matching the normalized domain
       return res.status(200).send({
-        domain: domain,
-        screenshots: files.map(file => {
-          // Extract URL path from filename to determine page type
-          let pageType = 'Homepage';
-          const filenameWithoutPrefix = file.filename.replace(/^screenshot-/, '');
-          
-          // Check if the filename contains a section indicator (has a hyphen after domain)
-          if (filenameWithoutPrefix.includes('-')) {
-            const parts = filenameWithoutPrefix.split('-');
-            if (parts.length > 1) {
-              // Get everything after the first part (domain)
-              const section = parts.slice(1).join('-').replace(/\.png$/, '');
-              
-              // Clean up timestamp if present
-              const sectionWithoutTimestamp = section.replace(/-\d{4}-\d{2}.*$/, '');
-              
-              if (sectionWithoutTimestamp) {
-                // Format the section name nicely
-                pageType = sectionWithoutTimestamp
-                  .replace(/-/g, ' ')
-                  .replace(/\b\w/g, l => l.toUpperCase());
-              }
-            }
-          }
-          
-          return {
-            filename: file.filename,
-            url: file.url,
-            timestamp: file.stats.mtime,
-            pageType: pageType
-          };
-        })
+        domain: normalizedDomain, // Return the normalized domain that was searched for
+        screenshots: files.map(file => ({ // Map to the expected output format
+          filename: file.filename,
+          url: file.url,
+          timestamp: file.timestamp,
+          pageType: file.pageType
+        }))
       });
     } catch (error) {
-      console.error(`Error retrieving screenshots: ${error}`);
-      res.status(500).send({ error: 'Internal server error' });
+      console.error(`Error retrieving screenshots for normalized domain ${normalizedDomain}: ${error}`);
+      res.status(500).send({ error: 'Internal server error while retrieving screenshots' });
     }
   });
 
-  // Endpoint to list all domains with screenshots
+  // Endpoint to list all domains with screenshots (revised)
   app.get('/domains', (req, res) => {
     const screenshotsDir = path.join(__dirname, 'screenshots');
-    
+
     try {
       if (!fs.existsSync(screenshotsDir)) {
         return res.json({ domains: [] });
       }
 
-      // Get all PNG files in the screenshots directory
-      const files = fs.readdirSync(screenshotsDir)
-        .filter(file => file.endsWith('.png'))
-        .map(file => ({
-          filename: file,
-          path: path.join(screenshotsDir, file),
-          url: `/screenshots/${file}`,
-          stats: fs.statSync(path.join(screenshotsDir, file))
-        }));
-
-      // Create a map to organize domains, subdomains, and their screenshots
+      // Create a map to hold domain info, keyed by the parsed domain name
       const domainMap = {};
 
       // Process each file to extract domain information and organize screenshots
-      files.forEach(file => {
-        // Use the parseFilename helper function to extract domain
-        const { domain: extractedDomain, isHomepage, section } = parseFilename(file.filename);
-        
-        // Skip if domain extraction failed
-        if (!extractedDomain || extractedDomain === 'unknown') return;
-        
-        // Split the domain by dots to identify parts
-        const parts = extractedDomain.split('.');
-        
-        // Determine if this is a subdomain or main domain
-        let mainDomain, subdomain;
-        
-        if (parts.length >= 2) {
-          // Get the main domain (last two parts, e.g., example.com)
-          mainDomain = parts.slice(-2).join('.');
-          
-          // If there are more than 2 parts, it's a subdomain
-          subdomain = parts.length > 2 ? extractedDomain : null;
-        } else {
-          // Handle single-part domains (rare, but possible in local environments)
-          mainDomain = extractedDomain;
-          subdomain = null;
-        }
-        
-        // Initialize the main domain entry if it doesn't exist
-        if (!domainMap[mainDomain]) {
-          domainMap[mainDomain] = {
-            name: mainDomain,
-            subdomains: [],
-            screenshots: []
-          };
-        }
-        
-        // Extract page type information
-        let pageType = 'Homepage';
-        if (!isHomepage && section) {
-          pageType = section
-            .replace(/-/g, ' ')
-            .replace(/\b\w/g, l => l.toUpperCase());
-        }
-        
-        // Create screenshot object with all relevant information
-        const screenshot = {
-          filename: file.filename,
-          url: file.url,
-          timestamp: file.stats.mtime,
-          pageType: pageType,
-          domain: extractedDomain
-        };
-        
-        // Add screenshot to the main domain
-        domainMap[mainDomain].screenshots.push(screenshot);
-        
-        // If this is a subdomain, add it to the subdomains list if not already there
-        if (subdomain && !domainMap[mainDomain].subdomains.includes(subdomain)) {
-          domainMap[mainDomain].subdomains.push(subdomain);
-        }
-      });
+      fs.readdirSync(screenshotsDir)
+        .filter(file => file.endsWith('.png'))
+        .forEach(file => {
+          // Use the parseFilename helper function to extract info
+          const fileInfo = parseFilename(file);
+
+          // Skip if domain extraction failed or is invalid
+          if (!fileInfo || fileInfo.domain === 'unknown') return;
+
+          const domainKey = fileInfo.domain; // e.g., 'example.com'
+
+          // Initialize the domain entry if it doesn't exist
+          if (!domainMap[domainKey]) {
+            domainMap[domainKey] = {
+              name: domainKey, // Use the parsed domain name directly
+              // Subdomains are implicitly handled as separate keys now if they exist
+              screenshots: []
+            };
+          }
+
+          try {
+              const stats = fs.statSync(path.join(screenshotsDir, file));
+              // Determine page type based on parsed info
+              let pageType = 'Homepage';
+              if (!fileInfo.isHomepage && fileInfo.section) {
+                  pageType = fileInfo.section
+                      .replace(/_/g, ' ') // Convert sanitization underscores back to spaces
+                      .replace(/\b\w/g, l => l.toUpperCase()); // Capitalize
+              }
+
+              // Create screenshot object
+              const screenshot = {
+                filename: file,
+                url: `/screenshots/${file}`,
+                timestamp: stats.mtime,
+                pageType: pageType,
+                domain: domainKey // Associate with the parsed domain
+              };
+
+              // Add screenshot to the domain's list
+              domainMap[domainKey].screenshots.push(screenshot);
+          } catch (statError) {
+               console.error(`Could not get stats for domain listing file ${file}: ${statError.message}`);
+          }
+        });
 
       // Convert map to array for response
       const domainsWithScreenshots = Object.values(domainMap)
-        // Sort domains alphabetically
+        // Sort domains alphabetically by name
         .sort((a, b) => a.name.localeCompare(b.name))
-        // Sort screenshots by timestamp (newest first)
+        // Sort screenshots within each domain by timestamp (newest first)
         .map(domain => ({
           ...domain,
-          screenshots: domain.screenshots.sort((a, b) => 
+          screenshots: domain.screenshots.sort((a, b) =>
             new Date(b.timestamp) - new Date(a.timestamp)
           )
         }));
@@ -583,66 +672,93 @@ if (cluster.isMaster) {
     }
   });
 
-  // Endpoint to download all screenshots as ZIP
+  // Endpoint to download all screenshots as ZIP (revised)
   app.get('/download-all', (req, res) => {
     const screenshotsDir = path.join(__dirname, 'screenshots');
-    
+
     try {
       if (!fs.existsSync(screenshotsDir)) {
-        return res.status(404).json({ error: 'No screenshots found' });
+        return res.status(404).json({ error: 'No screenshots found (directory missing)' });
       }
 
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const zipFilename = `screenshots-${timestamp}.zip`;
-      res.attachment(zipFilename);
-      
-      const archive = archiver('zip', { zlib: { level: 9 } });
+      const timestampStr = new Date().toISOString().replace(/[:.]/g, '-');
+      const zipFilename = `screenshots-${timestampStr}.zip`;
+      res.attachment(zipFilename); // Suggest download filename
+
+      const archive = archiver('zip', { zlib: { level: 9 } }); // Create zip archive
+
+      // Pipe archive data to the response
       archive.pipe(res);
 
+      // Handle warnings and errors during archiving
+      archive.on('warning', (err) => {
+          if (err.code === 'ENOENT') {
+              console.warn('Archiver warning (file not found?):', err); // Log file not found warnings
+          } else {
+              // Throw other warnings as errors
+              throw err;
+          }
+      });
+      archive.on('error', (err) => {
+          console.error('Archiver error:', err);
+          // Try to send error response if headers not sent yet
+          if (!res.headersSent) {
+              res.status(500).json({ error: 'Failed to create ZIP archive during processing' });
+          }
+      });
+       // Signal end of response when archive is finalized
+       archive.on('end', () => {
+          console.log('ZIP archive finalized successfully.');
+       });
+
+
+      // Get list of files to add
       const files = fs.readdirSync(screenshotsDir)
         .filter(file => file.endsWith('.png'));
 
-      // Process each file and add it to the archive
+      console.log(`Archiving ${files.length} screenshot files...`);
+
+      // Process each file and add it to the archive with a structured path
       files.forEach(file => {
         const filePath = path.join(screenshotsDir, file);
-        
-        // Extract domain and section from filename
-        const filenameWithoutPrefix = file.replace(/^screenshot-/, '');
-        let domain, section;
-        
-        // Split by hyphen to get domain and section
-        const parts = filenameWithoutPrefix.split('-');
-        domain = parts[0];
-        
-        // Determine if this is a homepage or section page
-        let isHomepage = parts.length === 1;
-        
-        // If there are more parts, it's likely a section page
-        if (!isHomepage) {
-          // Join all parts after the domain, but remove any timestamp
-          section = parts.slice(1).join('-').replace(/\.png$/, '').replace(/-\d{4}-\d{2}.*$/, '');
-          // If section is empty after cleaning, treat as homepage
-          isHomepage = !section;
+        try {
+          // Use the parseFilename helper to get structured info
+          const fileInfo = parseFilename(file);
+
+          // Skip files with unknown domains
+          if (fileInfo.domain === 'unknown') {
+            console.warn(`Skipping file with unknown domain in ZIP archive: ${file}`);
+            return;
+          }
+
+          // Determine the path inside the ZIP file
+          const domainDir = fileInfo.domain; // e.g., 'example.com'
+          let baseFilename = 'index'; // Default for homepage screenshots
+
+          if (!fileInfo.isHomepage && fileInfo.section) {
+             // Use the section name for the filename (keep underscores for consistency)
+             baseFilename = fileInfo.section;
+          }
+
+          // Construct the path within the ZIP archive: Domain/Section.png or Domain/index.png
+          const zipPath = `${domainDir}/${baseFilename}.png`;
+
+          // Add the file to the archive
+          console.log(`Adding to archive: ${filePath} as ${zipPath}`);
+          archive.file(filePath, { name: zipPath });
+
+        } catch(parseError) {
+            // Log errors encountered while processing individual files for the archive
+            console.error(`Error processing file ${file} for ZIP archive: ${parseError.message}`);
         }
-        
-        // Create a nice section name for display
-        const sectionDisplay = section ? section.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) : null;
-        
-        let zipPath;
-        if (isHomepage) {
-          zipPath = `${domain}/index.png`;
-        } else {
-          // Create a more descriptive filename based on the section
-          zipPath = `${domain}/${section}.png`;
-        }
-        
-        console.log(`Adding to archive: ${file} as ${zipPath}`);
-        archive.file(filePath, { name: zipPath });
       });
 
+      // Finalize the archive (no more files will be added)
       archive.finalize();
+
     } catch (error) {
-      console.error('Error creating ZIP archive:', error);
+      // Catch synchronous errors that might occur before archiving starts
+      console.error('Error initiating ZIP archive creation:', error);
       if (!res.headersSent) {
         res.status(500).json({ error: 'Failed to create ZIP archive' });
       }

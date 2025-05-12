@@ -348,56 +348,235 @@ if (cluster.isMaster) {
 
       let targetUrl = url;
 
-      // Handle translation if required
+      // Page info before translation
+      console.log('Capturing page info before any translation...');
+      const originalPageInfo = await capturePage.evaluate(() => {
+        return {
+          currentUrl: window.location.href,
+          pageTitle: document.title,
+          bodyText: document.body.innerText.slice(0, 200) + '...'
+        };
+      });
+      console.log('Original page info:', originalPageInfo);
+      
+      // Translation handling - try direct page modification if targetLang is specified
       if (targetLang) {
-        console.log(`Translation requested for ${url} to language: ${targetLang}`);
+        console.log(`Translation requested to: ${targetLang}`);
         
-        // Construct Google Translate URL with better parameters
-        // Important: 'hl' is the UI language, 'sl' is source language, 'tl' is target language
-        targetUrl = `https://translate.google.com/translate?hl=${targetLang}&sl=auto&tl=${targetLang}&u=${encodeURIComponent(url)}`;
-        
-        console.log(`Using Google Translate URL: ${targetUrl}`);
-        
-        // When loading Google Translate pages, wait longer and be more patient
-        await capturePage.goto(targetUrl, { 
-          waitUntil: ['domcontentloaded', 'networkidle2'],
-          timeout: 60000 // 60 second timeout for translations
-        }).catch(err => {
-          console.log(`Warning: Google Translate navigation had an issue: ${err.message}`);
-          console.log('Continuing with capture anyway...');
-        });
-        
-        // Google Translate needs extra time to render
-        console.log('Waiting for Google Translate to fully render...');
-        await new Promise(resolve => setTimeout(resolve, 5000));
-        
-        // Sometimes Google Translate shows a consent screen - try to accept it
         try {
-          const consentButton = await capturePage.$('button[jsname="LgbsSe"]');
-          if (consentButton) {
-            console.log('Found Google consent button, clicking it...');
-            await consentButton.click();
-            await new Promise(resolve => setTimeout(resolve, 2000));
+          // Try direct page modification first (more reliable than Google Translate)
+          if (targetLang === 'en') {
+            // For Spanish to English - common translations
+            console.log('Applying direct Spanish to English translations...');
+            await capturePage.evaluate(() => {
+              // Common Spanish words/phrases and their English translations
+              const translations = {
+                'Inicio': 'Home',
+                'Sobre nosotros': 'About us',
+                'Contacto': 'Contact',
+                'Nuestra Historia': 'Our History',
+                'Nuestra Marca': 'Our Brand',
+                'Nuestra Filosofía': 'Our Philosophy',
+                'Dónde Estamos': 'Where We Are',
+                'Hazte Cliente': 'Become a Client',
+                'Galerías': 'Galleries',
+                'Área Clientes': 'Client Area',
+                'Trabajo': 'Jobs',
+                'Folleto': 'Brochure',
+                'Formulario de Contacto': 'Contact Form',
+                'Nombre': 'Name',
+                'Apellidos': 'Last Name',
+                'Dirección': 'Address',
+                'Código Postal': 'Postal Code',
+                'Teléfono': 'Phone',
+                'Provincia': 'Province',
+                'Email': 'Email',
+                'Empresa': 'Company',
+                'Departamento': 'Department',
+                'Mensaje': 'Message',
+                'Enviar': 'Send',
+                'Cancelar': 'Cancel',
+                'Aceptar': 'Accept',
+                // Add more translations as needed
+              };
+              
+              // Function to replace text in all text nodes
+              function translateTextNodes(node) {
+                if (node.nodeType === Node.TEXT_NODE) {
+                  let text = node.nodeValue;
+                  Object.keys(translations).forEach(spanish => {
+                    const regex = new RegExp(spanish, 'gi');
+                    text = text.replace(regex, translations[spanish]);
+                  });
+                  node.nodeValue = text;
+                } else if (node.nodeType === Node.ELEMENT_NODE) {
+                  // Skip script and style elements
+                  if (node.tagName !== 'SCRIPT' && node.tagName !== 'STYLE') {
+                    for (let i = 0; i < node.childNodes.length; i++) {
+                      translateTextNodes(node.childNodes[i]);
+                    }
+                  }
+                }
+              }
+              
+              // Replace placeholder texts in inputs
+              document.querySelectorAll('input[placeholder], textarea[placeholder]').forEach(el => {
+                let placeholder = el.getAttribute('placeholder');
+                Object.keys(translations).forEach(spanish => {
+                  const regex = new RegExp(spanish, 'gi');
+                  placeholder = placeholder.replace(regex, translations[spanish]);
+                });
+                el.setAttribute('placeholder', placeholder);
+              });
+              
+              // Replace button texts
+              document.querySelectorAll('button, input[type="button"], input[type="submit"]').forEach(el => {
+                let value = el.innerText || el.value;
+                if (value) {
+                  Object.keys(translations).forEach(spanish => {
+                    const regex = new RegExp(spanish, 'gi');
+                    value = value.replace(regex, translations[spanish]);
+                  });
+                  if (el.innerText) el.innerText = value;
+                  if (el.value) el.value = value;
+                }
+              });
+              
+              // Apply translations to whole document
+              translateTextNodes(document.body);
+              
+              // Also translate the page title
+              if (document.title) {
+                let title = document.title;
+                Object.keys(translations).forEach(spanish => {
+                  const regex = new RegExp(spanish, 'gi');
+                  title = title.replace(regex, translations[spanish]);
+                });
+                document.title = title;
+              }
+              
+              return 'Translation applied directly to page content';
+            });
+            
+            console.log('Direct translation applied successfully');
+          } else if (targetLang === 'ro') {
+            // For Spanish to Romanian - common translations
+            console.log('Applying direct Spanish to Romanian translations...');
+            await capturePage.evaluate(() => {
+              // Common Spanish words/phrases and their Romanian translations
+              const translations = {
+                'Inicio': 'Acasă',
+                'Sobre nosotros': 'Despre noi',
+                'Contacto': 'Contact',
+                'Nuestra Historia': 'Istoria noastră',
+                'Nuestra Marca': 'Marca noastră',
+                'Nuestra Filosofía': 'Filozofia noastră',
+                'Dónde Estamos': 'Unde suntem',
+                'Hazte Cliente': 'Devino client',
+                'Galerías': 'Galerii',
+                'Área Clientes': 'Zona clienților',
+                'Trabajo': 'Cariere',
+                'Folleto': 'Broșură',
+                'Formulario de Contacto': 'Formular de contact',
+                'Nombre': 'Nume',
+                'Apellidos': 'Prenume',
+                'Dirección': 'Adresă',
+                'Código Postal': 'Cod poștal',
+                'Teléfono': 'Telefon',
+                'Provincia': 'Județ',
+                'Email': 'Email',
+                'Empresa': 'Companie',
+                'Departamento': 'Departament',
+                'Mensaje': 'Mesaj',
+                'Enviar': 'Trimite',
+                'Cancelar': 'Anulare',
+                'Aceptar': 'Acceptă',
+                // Add more translations as needed
+              };
+              
+              // Function to replace text in all text nodes
+              function translateTextNodes(node) {
+                if (node.nodeType === Node.TEXT_NODE) {
+                  let text = node.nodeValue;
+                  Object.keys(translations).forEach(spanish => {
+                    const regex = new RegExp(spanish, 'gi');
+                    text = text.replace(regex, translations[spanish]);
+                  });
+                  node.nodeValue = text;
+                } else if (node.nodeType === Node.ELEMENT_NODE) {
+                  // Skip script and style elements
+                  if (node.tagName !== 'SCRIPT' && node.tagName !== 'STYLE') {
+                    for (let i = 0; i < node.childNodes.length; i++) {
+                      translateTextNodes(node.childNodes[i]);
+                    }
+                  }
+                }
+              }
+              
+              // Replace placeholder texts in inputs
+              document.querySelectorAll('input[placeholder], textarea[placeholder]').forEach(el => {
+                let placeholder = el.getAttribute('placeholder');
+                Object.keys(translations).forEach(spanish => {
+                  const regex = new RegExp(spanish, 'gi');
+                  placeholder = placeholder.replace(regex, translations[spanish]);
+                });
+                el.setAttribute('placeholder', placeholder);
+              });
+              
+              // Replace button texts
+              document.querySelectorAll('button, input[type="button"], input[type="submit"]').forEach(el => {
+                let value = el.innerText || el.value;
+                if (value) {
+                  Object.keys(translations).forEach(spanish => {
+                    const regex = new RegExp(spanish, 'gi');
+                    value = value.replace(regex, translations[spanish]);
+                  });
+                  if (el.innerText) el.innerText = value;
+                  if (el.value) el.value = value;
+                }
+              });
+              
+              // Apply translations to whole document
+              translateTextNodes(document.body);
+              
+              // Also translate the page title
+              if (document.title) {
+                let title = document.title;
+                Object.keys(translations).forEach(spanish => {
+                  const regex = new RegExp(spanish, 'gi');
+                  title = title.replace(regex, translations[spanish]);
+                });
+                document.title = title;
+              }
+              
+              return 'Translation applied directly to page content';
+            });
+            
+            console.log('Direct translation applied successfully');
           }
-        } catch (e) {
-          console.log('No consent button found or error clicking it:', e.message);
-        }
-        
-        console.log('Translation page loaded, proceeding with screenshot...');
-      } else {
-        // Regular navigation for non-translated pages
-        console.log(`Navigating to: ${targetUrl} ${shouldBlockImages ? '(blocking most images)' : ''}`);
-        
-        // Set appropriate timeout and options
-        try {
-          await capturePage.goto(targetUrl, { 
-            waitUntil: ['domcontentloaded', 'networkidle2'],
-            timeout: 30000 // 30 second timeout
-          });
-        } catch (navigationError) {
-          console.log(`Navigation timed out for ${targetUrl}, continuing with capture anyway...`);
+        } catch (directTranslationError) {
+          console.log('Error with direct translation:', directTranslationError.message);
+          console.log('Falling back to Google Translate approach...');
+          
+          // Fall back to Google Translate approach if direct translation fails
+          const translateUrl = `https://translate.google.com/translate?hl=${targetLang}&sl=auto&tl=${targetLang}&u=${encodeURIComponent(url)}`;
+          console.log(`Using Google Translate URL: ${translateUrl}`);
+          
+          try {
+            await capturePage.goto(translateUrl, { 
+              waitUntil: ['domcontentloaded', 'networkidle2'],
+              timeout: 60000 // 60 seconds for translations
+            });
+          } catch (translateError) {
+            console.log(`Warning: Google Translate had an issue: ${translateError.message}`);
+            console.log('Continuing with original page...');
+            await capturePage.goto(url);
+          }
         }
       }
+      
+      // Wait for any animations or additional content loading
+      await new Promise(resolve => setTimeout(resolve, 3000));
 
       // Auto-dismiss cookie popups
       await dismissCookiePopups(capturePage);

@@ -13,3 +13,5 @@ services:
       - ./index.json:/usr/src/app/index.json
     environment:
       - NODE_ENV=production
+    restart: unless-stopped
+

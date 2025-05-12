@@ -1104,7 +1104,7 @@ if (cluster.isMaster) {
     console.log(`Worker ${process.pid} received POST request to /api/screenshots`);
     console.log('Request body:', req.body);
     
-    const { urls, userId = 1, benchmarkId } = req.body;  // Default userId to 1 if not provided
+    const { urls, userId = 1, benchmarkId, language } = req.body;  // Extract language from request body
 
     // Add additional headers to log
     console.log('Request headers:', req.headers);
@@ -1115,12 +1115,29 @@ if (cluster.isMaster) {
 
     console.log('translate-to-romanian header:', translateHeader);
     console.log(`User ID: ${userId} (${userId ? 'provided' : 'using default'}), Benchmark ID: ${benchmarkId}`);
+    console.log(`Language from body: ${language || 'not specified'}`);
 
     let targetLang = null;
-    if (translateHeader === 'true') {
+    
+    // First check if language is specified in the request body
+    if (language) {
+      if (language.toLowerCase() === 'ro') {
+        targetLang = 'ro'; // Translate to Romanian
+        console.log('Using Romanian translation based on request body');
+      } else if (language.toLowerCase() === 'en') {
+        targetLang = 'en'; // Translate to English
+        console.log('Using English translation based on request body');
+      } else {
+        return res.status(400).send({ error: 'Invalid language value. Use "en" for English or "ro" for Romanian.' });
+      }
+    } 
+    // If no language in body, fall back to header-based logic
+    else if (translateHeader === 'true') {
       targetLang = 'ro'; // Translate to Romanian
+      console.log('Using Romanian translation based on header');
     } else if (translateHeader === 'false') {
       targetLang = 'en'; // Translate to English
+      console.log('Using English translation based on header');
     } else if (translateHeader) {
       // If the header is set but not 'true' or 'false', return an error
       return res.status(400).send({ error: 'Invalid translate-to-romanian header value. Use "true" or "false".' });

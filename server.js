@@ -1268,11 +1268,31 @@ if (cluster.isMaster) {
     console.log(`Worker ${process.pid} received POST request to /api/screenshots-base64`);
     console.log('Request body:', req.body);
     
-    const { urls, userId = 1, benchmarkId } = req.body;  // Default userId to 1 if not provided
+    const { urls, userId = 1, benchmarkId, language } = req.body;  // Extract language parameter here
 
     // Add additional headers to log
     console.log('Request headers:', req.headers);
     console.log(`User ID: ${userId} (${userId ? 'provided' : 'using default'}), Benchmark ID: ${benchmarkId}`);
+    console.log(`Language setting: ${language || 'not specified'}`);
+
+    // Set up translation if language is specified
+    let targetLang = null;
+    if (language) {
+      if (language.toLowerCase() === 'ro') {
+        // Translate to Romanian
+        targetLang = 'ro';
+        console.log('Will translate content to Romanian');
+      } else if (language.toLowerCase() === 'en') {
+        // Translate to English
+        targetLang = 'en';
+        console.log('Will translate content to English');
+      } else {
+        return res.status(400).send({ 
+          error: 'Invalid language value', 
+          message: 'Use "en" for English translation or "ro" for Romanian translation'
+        });
+      }
+    }
 
     // Check if URLs is a single string and split it
     let urlList = urls;
@@ -1335,11 +1355,52 @@ if (cluster.isMaster) {
             });
           });
           
-          // Go to URL
-          await page.goto(url, { 
-            waitUntil: ['domcontentloaded', 'networkidle2'],
-            timeout: 30000
-          });
+          // Set original URL
+          let targetUrl = url;
+          
+          // Handle translation if required
+          if (targetLang) {
+            console.log(`Translation requested for ${url} to language: ${targetLang}`);
+            
+            // Construct Google Translate URL
+            targetUrl = `https://translate.google.com/translate?hl=${targetLang}&sl=auto&tl=${targetLang}&u=${encodeURIComponent(url)}`;
+            
+            console.log(`Using Google Translate URL: ${targetUrl}`);
+            
+            // Go to translated URL with extended timeout
+            await page.goto(targetUrl, { 
+              waitUntil: ['domcontentloaded', 'networkidle2'],
+              timeout: 60000 // 60 seconds for translations
+            }).catch(err => {
+              console.log(`Warning: Google Translate had an issue: ${err.message}`);
+              console.log('Continuing with capture anyway...');
+            });
+            
+            // Google Translate needs extra time to render
+            console.log('Waiting for Google Translate to fully render...');
+            await page.waitForTimeout(5000);
+            
+            // Handle Google consent screen if it appears
+            try {
+              const consentButton = await page.$('button[jsname="LgbsSe"]');
+              if (consentButton) {
+                console.log('Found Google consent button, clicking it...');
+                await consentButton.click();
+                await page.waitForTimeout(2000);
+              }
+            } catch (e) {
+              console.log('No consent button found or error clicking it:', e.message);
+            }
+            
+            console.log('Translation page loaded, proceeding with screenshot...');
+          } else {
+            // Go to original URL if no translation
+            console.log(`Going to original URL: ${targetUrl}`);
+            await page.goto(targetUrl, { 
+              waitUntil: ['domcontentloaded', 'networkidle2'],
+              timeout: 30000
+            });
+          }
           
           // Auto-dismiss cookie popups
           await dismissCookiePopups(page);

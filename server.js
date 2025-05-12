@@ -863,115 +863,196 @@ if (cluster.isMaster) {
     try {
       console.log('Attempting to dismiss ad popups and promotional overlays...');
       
+      // Aggressive approach - find ALL "X" buttons and close icons first
+      await page.evaluate(() => {
+        console.log('Searching for close buttons using aggressive approach...');
+        // Get any element that looks like an X button or close button
+        // This runs in the browser context so we can use DOM directly
+        
+        // Function to check if an element is visible
+        const isVisible = (el) => {
+          if (!el) return false;
+          const style = window.getComputedStyle(el);
+          return style.display !== 'none' && 
+                 style.visibility !== 'hidden' && 
+                 style.opacity !== '0' &&
+                 el.offsetWidth > 0 &&
+                 el.offsetHeight > 0;
+        };
+        
+        // Function to check if element is likely a close button
+        const isCloseButton = (el) => {
+          if (!el) return false;
+          
+          // Check text content
+          const text = el.textContent.trim();
+          if (text === '×' || text === 'X' || text === '✕' || text === '✖' || text === '⨯') return true;
+          
+          // Check for close-related classes
+          const classNames = el.className || '';
+          const id = el.id || '';
+          if (/close|dismiss|cancel|shut/i.test(classNames) || /close|dismiss|cancel|shut/i.test(id)) return true;
+          
+          // Check for small clickable elements in corners
+          const rect = el.getBoundingClientRect();
+          if (rect.width < 40 && rect.height < 40) {
+            const isTopRight = rect.top < 100 && rect.right > window.innerWidth - 100;
+            const isTopLeft = rect.top < 100 && rect.left < 100;
+            if (isTopRight || isTopLeft) return true;
+          }
+          
+          return false;
+        };
+        
+        // 1. First look specifically for X characters in small elements (these are almost always close buttons)
+        const allElements = document.querySelectorAll('*');
+        const closeElements = Array.from(allElements).filter(el => {
+          if (!isVisible(el)) return false;
+          
+          // Check for exact "X" or "×" text content
+          if (el.textContent.trim() === 'X' || 
+              el.textContent.trim() === '×' || 
+              el.textContent.trim() === '✕' || 
+              el.textContent.trim() === '✖' || 
+              el.textContent.trim() === '⨯') {
+            const rect = el.getBoundingClientRect();
+            // Small elements with X are almost certainly close buttons
+            return rect.width < 40 && rect.height < 40;
+          }
+          return false;
+        });
+        
+        // 2. Also find elements that are likely close buttons based on classes and position
+        const potentialCloseButtons = Array.from(allElements).filter(el => 
+          isVisible(el) && isCloseButton(el) && !closeElements.includes(el)
+        );
+        
+        // Combine and sort by position (top corner buttons first)
+        const allCloseButtons = [...closeElements, ...potentialCloseButtons]
+          .sort((a, b) => {
+            const aRect = a.getBoundingClientRect();
+            const bRect = b.getBoundingClientRect();
+            // Prioritize top-right corner positions (most common for close buttons)
+            const aScore = (aRect.top < 100 ? 100 : 0) + (aRect.right > window.innerWidth - 100 ? 50 : 0);
+            const bScore = (bRect.top < 100 ? 100 : 0) + (bRect.right > window.innerWidth - 100 ? 50 : 0);
+            return bScore - aScore;
+          });
+        
+        console.log(`Found ${allCloseButtons.length} potential close buttons`);
+        
+        // Click the best candidates
+        if (allCloseButtons.length > 0) {
+          // Focus on the top 3 most likely buttons
+          const buttonsTryToClick = allCloseButtons.slice(0, 3);
+          buttonsTryToClick.forEach(btn => {
+            try {
+              console.log('Clicking on likely close button:', btn.outerHTML);
+              btn.click();
+            } catch (e) {
+              console.log('Error clicking button:', e);
+            }
+          });
+          return true;
+        }
+        
+        return false;
+      });
+      
+      // Wait a short time for any animations from the clicks
+      await page.waitForTimeout(500);
+      
       // Common selectors for ad popups and promotional overlays
       const adSelectors = [
-        // Close buttons and icons
-        '.close-button', '.close-icon', '.popup-close', '.ad-close', '.modal-close',
-        'button[aria-label="Close"]', 'button[aria-label="close"]',
-        'button.close', 'span.close', 'a.close',
-        '[class*="close"]', '[id*="close"]',
-        '[class*="dismiss"]', '[id*="dismiss"]',
-        // X buttons (common in ads)
-        'button:has(span:contains("×"))',
-        'span:contains("×")',
-        '[class*="modal"] button',
-        // Common ad and promo popup selectors
-        '.popup', '.modal', '.overlay', '.lightbox',
-        '.ad-container', '.promo-popup', '.newsletter-popup',
-        '.offer-overlay', '.campaign-popup', '.discount-popup',
-        '[class*="popup"]', '[id*="popup"]',
-        '[class*="modal"]', '[id*="modal"]',
-        '[class*="overlay"]', '[id*="overlay"]',
-        // Specific promotional content selectors
+        // Close buttons and icons (more specific)
+        'button.close', '.btn-close', '.icon-close', '.modal-close', '.popup-close', '.closeButton', '.close-button',
+        '[aria-label="Close"]', '[aria-label="close"]', '[title="Close"]', '[title="close"]',
+        'a.close', 'span.close', 'i.close', 'div.close',
+        // X-specific selectors
+        'button:has(span:contains("×"))', 'span:contains("×")', 'div:contains("×")',
+        // Generic close patterns
+        '[class*="close"]', '[id*="close"]', '[class*="dismiss"]', '[id*="dismiss"]',
+        // Common ad and promo popup containers
+        '.popup', '.modal', '.overlay', '.lightbox', '.modal-dialog',
+        '.ad-container', '.promo-popup', '.newsletter-popup', '.offer-overlay',
+        // Specific promotional content
         '[class*="newsletter"]', '[id*="newsletter"]',
-        '[class*="concurs"]', '[id*="concurs"]',  // "concurs" is Romanian for "contest"
+        '[class*="concurs"]', '[id*="concurs"]',
         '[class*="promo"]', '[id*="promo"]',
-        '[class*="discount"]', '[id*="discount"]',
-        '[class*="offer"]', '[id*="offer"]'
+        '[class*="popup"]', '[id*="popup"]'
       ];
       
-      // First try to click on close buttons
+      // Try each selector and click if found
       for (const selector of adSelectors) {
         try {
-          const closeButtons = await page.$$(selector);
-          if (closeButtons.length > 0) {
-            // Look for elements that look like close buttons (prioritize those with "×" content or specific classes)
-            const prioritizedButtons = await page.evaluate((selector) => {
-              const elements = Array.from(document.querySelectorAll(selector));
-              return elements.map(el => {
-                let score = 0;
-                
-                // Prioritize elements with "×" content
-                if (el.textContent.includes('×')) score += 10;
-                if (el.textContent === '×') score += 5;
-                
-                // Check class names for close-related terms
-                const className = el.className || '';
-                if (/close|dismiss|cancel|shut/i.test(className)) score += 8;
-                if (/popup|modal|dialog/i.test(className)) score += 3;
-                
-                // Check for position - close buttons are often in corners
-                const rect = el.getBoundingClientRect();
-                const style = window.getComputedStyle(el);
-                
-                // Top-right position is common for close buttons
-                if ((rect.top < 100 && rect.right > window.innerWidth - 100) || 
-                    style.position === 'absolute' || style.position === 'fixed') {
-                  score += 5;
-                }
-                
-                // Small elements are often close buttons
-                if (rect.width < 50 && rect.height < 50) score += 3;
-                
-                // Check for visibility and clickability
-                if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
-                  score = -100; // Not visible, don't click
-                }
-                
-                return { el, score };
-              });
-            }, selector);
-            
-            // Sort by score (highest first) and click the best candidate
-            if (prioritizedButtons.length > 0) {
-              const sortedButtons = prioritizedButtons.sort((a, b) => b.score - a.score);
-              if (sortedButtons[0].score > 0) {
-                await closeButtons[0].click();
-                console.log(`Clicked ad popup close button using selector: ${selector}`);
-                await page.waitForTimeout(300);
-                break;
-              }
-            }
+          const elements = await page.$$(selector);
+          if (elements.length > 0) {
+            await elements[0].click().catch(() => {});
+            console.log(`Clicked potential ad popup element using selector: ${selector}`);
+            await page.waitForTimeout(300);
           }
         } catch (err) {
           // Ignore errors for individual selectors
         }
       }
       
-      // Try removing ad overlays directly from the DOM
+      // Try the "click anywhere" approach for overlay dismissal
+      // Some overlays close when you click anywhere on them
+      await page.evaluate(() => {
+        // Find large overlay elements
+        const overlays = Array.from(document.querySelectorAll('div[class*="overlay"], div[class*="modal"], div[class*="popup"]'))
+          .filter(el => {
+            const style = window.getComputedStyle(el);
+            if (style.display === 'none' || style.visibility === 'hidden') return false;
+            
+            const rect = el.getBoundingClientRect();
+            // Look for large elements that cover most of the screen
+            return rect.width > window.innerWidth * 0.5 && rect.height > window.innerHeight * 0.5;
+          });
+        
+        // Click in the center of each overlay
+        overlays.forEach(overlay => {
+          try {
+            const centerX = overlay.offsetWidth / 2;
+            const centerY = overlay.offsetHeight / 2;
+            
+            // Create and dispatch a click event
+            const clickEvent = new MouseEvent('click', {
+              bubbles: true,
+              cancelable: true,
+              view: window,
+              clientX: centerX,
+              clientY: centerY
+            });
+            
+            overlay.dispatchEvent(clickEvent);
+          } catch (e) {
+            // Ignore click errors
+          }
+        });
+      });
+      
+      // Last resort: use the browser's Escape key to dismiss modals
+      await page.keyboard.press('Escape').catch(() => {});
+      
+      // Remove overlays from DOM directly as a final attempt
       await page.evaluate(() => {
         // Find elements that look like overlays
         const overlaySelectors = [
           // Visual characteristics of overlays
           'div[style*="position:fixed"]',
           'div[style*="position: fixed"]',
-          'div[style*="z-index: 9"]', // High z-index is common for overlays
-          'div[style*="z-index:9"]',
-          // Common class/id patterns for overlays
+          'div[style*="z-index:"]',
+          // Common overlay patterns
           '[class*="popup"]', '[id*="popup"]',
           '[class*="modal"]', '[id*="modal"]',
           '[class*="overlay"]', '[id*="overlay"]',
           '[class*="lightbox"]', '[id*="lightbox"]',
           // Promotional content
           '[class*="promo"]', '[id*="promo"]',
-          '[class*="offer"]', '[id*="offer"]',
-          '[class*="discount"]', '[id*="discount"]',
-          '[class*="newsletter"]', '[id*="newsletter"]',
-          '[class*="concurs"]', '[id*="concurs"]',
-          '[class*="campaign"]', '[id*="campaign"]'
+          '[class*="concurs"]', '[id*="concurs"]'
         ];
         
-        // Identify and remove elements that match characteristics of ad overlays
+        // Try to remove overlay elements
         overlaySelectors.forEach(selector => {
           try {
             const elements = document.querySelectorAll(selector);
@@ -979,50 +1060,38 @@ if (cluster.isMaster) {
               // Additional checks to ensure it's likely an overlay
               const style = window.getComputedStyle(el);
               const isOverlay = style.position === 'fixed' || 
-                               style.position === 'absolute' ||
-                               parseInt(style.zIndex) > 100 ||
-                               el.classList.contains('overlay') ||
-                               el.id.includes('overlay');
-                               
-              // Check if it's taking up significant screen space
+                              style.position === 'absolute' ||
+                              parseInt(style.zIndex || 0) > 100;
+                              
+              // Check size - overlays are usually large
               const rect = el.getBoundingClientRect();
-              const coveringSignificantArea = (rect.width > window.innerWidth * 0.5) || 
-                                             (rect.height > window.innerHeight * 0.5);
-                                             
+              const isLarge = rect.width > window.innerWidth * 0.5 || 
+                             rect.height > window.innerHeight * 0.5;
+              
               // Remove if it matches overlay characteristics
-              if ((isOverlay || coveringSignificantArea) && el.parentNode) {
-                // Check for promotional content
-                const text = el.textContent.toLowerCase();
-                if (text.includes('promo') || 
-                    text.includes('offer') || 
-                    text.includes('discount') || 
-                    text.includes('subscribe') ||
-                    text.includes('newsletter') ||
-                    text.includes('concurs') ||  // Romanian for "contest"
-                    text.includes('reducere') || // Romanian for "discount"
-                    text.includes('oferta') ||   // Romanian for "offer"
-                    text.includes('câștigă')) {  // Romanian for "win"
-                  el.parentNode.removeChild(el);
-                }
+              if ((isOverlay || isLarge) && el.parentNode) {
+                console.log('Removing overlay element:', el.outerHTML.substring(0, 100) + '...');
+                el.parentNode.removeChild(el);
               }
             });
           } catch (e) {
-            // Ignore individual selector errors
+            // Ignore removal errors
           }
         });
         
-        // Remove backdrop/overlay elements that often accompany modals
-        const backdropElements = document.querySelectorAll('.modal-backdrop, .overlay-backdrop, .popup-backdrop, [class*="backdrop"]');
+        // Remove backdrop/overlay elements
+        const backdropElements = document.querySelectorAll('.modal-backdrop, .overlay-backdrop, div[class*="backdrop"]');
         backdropElements.forEach(el => {
           if (el && el.parentNode) {
             el.parentNode.removeChild(el);
           }
         });
         
-        // Reset body styles that are often modified to prevent scrolling when modals are open
+        // Fix scroll locks
         document.body.style.overflow = 'auto';
         document.body.style.position = 'static';
         document.documentElement.style.overflow = 'auto';
+        document.body.classList.remove('modal-open', 'no-scroll', 'overflow-hidden');
       });
       
     } catch (error) {

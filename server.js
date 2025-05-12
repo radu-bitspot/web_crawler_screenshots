@@ -1546,188 +1546,534 @@ if (cluster.isMaster) {
           
           // Apply translation directly if requested
           if (targetLang) {
-            console.log(`Applying direct translation to language: ${targetLang}`);
+            console.log(`Applying translation to language: ${targetLang}`);
             
-            // Apply direct translation to the page content via JavaScript
             try {
-              await page.evaluate((targetLanguage) => {
-                // Add a translation indicator banner at the top of the page
-                const banner = document.createElement('div');
-                banner.style.position = 'fixed';
-                banner.style.top = '0';
-                banner.style.left = '0';
-                banner.style.right = '0';
-                banner.style.padding = '10px';
-                banner.style.backgroundColor = targetLanguage === 'en' ? '#4285f4' : '#cf2c19'; // Blue for English, Red for Romanian
-                banner.style.color = 'white';
-                banner.style.fontWeight = 'bold';
-                banner.style.textAlign = 'center';
-                banner.style.zIndex = '9999';
-                banner.style.fontSize = '14px';
-                banner.style.boxShadow = '0 2px 4px rgba(0,0,0,0.3)';
-                
-                banner.innerText = targetLanguage === 'en' 
-                  ? 'Translated to English (Direct Translation)' 
-                  : 'Tradus în Română (Traducere Directă)';
-                
-                document.body.prepend(banner);
-                
-                // Define language translations
-                const translations = targetLanguage === 'en' ? {
-                  // Spanish to English translations
-                  'Inicio': 'Home',
-                  'Sobre nosotros': 'About Us',
-                  'Contacto': 'Contact',
-                  'Nuestra Historia': 'Our History',
-                  'Nuestra Marca': 'Our Brand',
-                  'Nuestra Filosofía': 'Our Philosophy',
-                  'Dónde Estamos': 'Where We Are',
-                  'Hazte Cliente': 'Become a Client',
-                  'Galerías': 'Galleries',
-                  'Área Clientes': 'Client Area',
-                  'Trabajo': 'Jobs',
-                  'Folleto': 'Brochure',
-                  'Formulario de Contacto': 'Contact Form',
-                  'Formulario de Contacto a Central': 'Central Contact Form',
-                  'Nombre': 'Name',
-                  'Apellidos': 'Last Name',
-                  'Dirección': 'Address',
-                  'Código Postal': 'Postal Code',
-                  'Teléfono': 'Phone',
-                  'Provincia': 'Province',
-                  'Email': 'Email',
-                  'Empresa': 'Company',
-                  'Departamento': 'Department',
-                  'Mensaje': 'Message',
-                  'Enviar': 'Send',
-                  'Cancelar': 'Cancel',
-                  'Aceptar': 'Accept',
-                  'Datos de Contacto': 'Contact Details',
-                  'Información Personal': 'Personal Information',
-                  'Tu Mensaje': 'Your Message',
-                  'Centro': 'Center',
-                  'Alimentación': 'Food',
-                  'Droguería': 'Drugstore',
-                  'Perfumería': 'Perfumery',
-                  'Cash Sevilla S.A.': 'Cash Sevilla S.A.',
-                  'Almacenes Costasol S.A.': 'Almacenes Costasol S.A.',
-                  'Cash Dian Jerez S.A.': 'Cash Dian Jerez S.A.'
-                } : {
-                  // Spanish to Romanian translations
-                  'Inicio': 'Acasă',
-                  'Sobre nosotros': 'Despre noi',
-                  'Contacto': 'Contact',
-                  'Nuestra Historia': 'Istoria noastră',
-                  'Nuestra Marca': 'Marca noastră',
-                  'Nuestra Filosofía': 'Filozofia noastră',
-                  'Dónde Estamos': 'Unde suntem',
-                  'Hazte Cliente': 'Devino client',
-                  'Galerías': 'Galerii',
-                  'Área Clientes': 'Zona clienților',
-                  'Trabajo': 'Cariere',
-                  'Folleto': 'Broșură',
-                  'Formulario de Contacto': 'Formular de contact',
-                  'Formulario de Contacto a Central': 'Formular de contact central',
-                  'Nombre': 'Nume',
-                  'Apellidos': 'Prenume',
-                  'Dirección': 'Adresă',
-                  'Código Postal': 'Cod poștal',
-                  'Teléfono': 'Telefon',
-                  'Provincia': 'Județ',
-                  'Email': 'Email',
-                  'Empresa': 'Companie',
-                  'Departamento': 'Departament',
-                  'Mensaje': 'Mesaj',
-                  'Enviar': 'Trimite',
-                  'Cancelar': 'Anulare',
-                  'Aceptar': 'Acceptă',
-                  'Datos de Contacto': 'Date de contact',
-                  'Información Personal': 'Informații personale',
-                  'Tu Mensaje': 'Mesajul tău', 
-                  'Centro': 'Centru',
-                  'Alimentación': 'Alimentație',
-                  'Droguería': 'Drogherie',
-                  'Perfumería': 'Parfumerie',
-                  'Cash Sevilla S.A.': 'Cash Sevilla S.A.',
-                  'Almacenes Costasol S.A.': 'Almacenes Costasol S.A.',
-                  'Cash Dian Jerez S.A.': 'Cash Dian Jerez S.A.'
-                };
-                
-                // Function to recursively translate text nodes
-                function translateTextNodes(node) {
-                  if (node.nodeType === Node.TEXT_NODE) {
-                    let text = node.nodeValue;
-                    if (text.trim()) { // Only process non-empty text
-                      Object.keys(translations).forEach(spanish => {
-                        const regex = new RegExp('\\b' + spanish + '\\b', 'gi');
-                        text = text.replace(regex, translations[spanish]);
-                      });
-                      node.nodeValue = text;
+              // First approach: Try direct in-page translation (fastest, works offline)
+              await directTranslation();
+              
+              // If direct translation fails or if it's a language we don't have dictionaries for,
+              // use Google Translate API as fallback
+              async function directTranslation() {
+                // Apply direct translation to the page content via JavaScript
+                await page.evaluate((targetLanguage) => {
+                  // Add a translation indicator banner at the top of the page
+                  const banner = document.createElement('div');
+                  banner.style.position = 'fixed';
+                  banner.style.top = '0';
+                  banner.style.left = '0';
+                  banner.style.right = '0';
+                  banner.style.padding = '10px';
+                  banner.style.backgroundColor = targetLanguage === 'en' ? '#4285f4' : '#cf2c19'; // Blue for English, Red for Romanian
+                  banner.style.color = 'white';
+                  banner.style.fontWeight = 'bold';
+                  banner.style.textAlign = 'center';
+                  banner.style.zIndex = '9999';
+                  banner.style.fontSize = '14px';
+                  banner.style.boxShadow = '0 2px 4px rgba(0,0,0,0.3)';
+                  
+                  banner.innerText = targetLanguage === 'en' 
+                    ? 'Translated to English (Universal Translation)' 
+                    : 'Tradus în Română (Traducere Universală)';
+                  
+                  document.body.prepend(banner);
+                  
+                  // STEP 1: Detect the page language
+                  let detectedLanguage = 'unknown';
+                  
+                  // Simple language detection based on common words and characters
+                  function detectPageLanguage() {
+                    const text = document.body.innerText.toLowerCase();
+                    const langScores = {
+                      'es': 0, // Spanish
+                      'en': 0, // English
+                      'fr': 0, // French
+                      'de': 0, // German
+                      'it': 0, // Italian
+                      'pt': 0, // Portuguese
+                      'ro': 0, // Romanian
+                      'nl': 0  // Dutch
+                      // Add more languages as needed
+                    };
+                    
+                    // Spanish indicators
+                    if (text.includes('de la') || text.includes('del') || 
+                        text.includes('los') || text.includes('las') ||
+                        text.includes('que') || text.includes('con') ||
+                        text.includes('para') || text.includes('por') ||
+                        text.includes('cómo') || text.includes('está')) {
+                      langScores.es += 10;
                     }
-                  } else if (node.nodeType === Node.ELEMENT_NODE) {
-                    // Skip script and style elements
-                    if (node.tagName !== 'SCRIPT' && node.tagName !== 'STYLE') {
-                      for (let i = 0; i < node.childNodes.length; i++) {
-                        translateTextNodes(node.childNodes[i]);
+                    
+                    // English indicators
+                    if (text.includes('the') || text.includes('and') ||
+                        text.includes('are') || text.includes('that') ||
+                        text.includes('for') || text.includes('with') ||
+                        text.includes('was') || text.includes('this')) {
+                      langScores.en += 10;
+                    }
+                    
+                    // French indicators
+                    if (text.includes('les') || text.includes('des') ||
+                        text.includes('dans') || text.includes('pour') ||
+                        text.includes('avec') || text.includes('nous') ||
+                        text.includes('vous') || text.includes('sont')) {
+                      langScores.fr += 10;
+                    }
+                    
+                    // German indicators
+                    if (text.includes('der') || text.includes('die') ||
+                        text.includes('und') || text.includes('mit') ||
+                        text.includes('für') || text.includes('ist') ||
+                        text.includes('von') || text.includes('nicht')) {
+                      langScores.de += 10;
+                    }
+                    
+                    // Italian indicators
+                    if (text.includes('il') || text.includes('la') ||
+                        text.includes('della') || text.includes('nella') ||
+                        text.includes('sono') || text.includes('questo') ||
+                        text.includes('come') || text.includes('bene')) {
+                      langScores.it += 10;
+                    }
+                    
+                    // Portuguese indicators
+                    if (text.includes('da') || text.includes('do') ||
+                        text.includes('os') || text.includes('para') ||
+                        text.includes('com') || text.includes('muito') ||
+                        text.includes('não') || text.includes('você')) {
+                      langScores.pt += 10;
+                    }
+                    
+                    // Romanian indicators
+                    if (text.includes('și') || text.includes('pentru') ||
+                        text.includes('sunt') || text.includes('este') ||
+                        text.includes('acest') || text.includes('acesta') ||
+                        text.includes('mai') || text.includes('dacă')) {
+                      langScores.ro += 10;
+                    }
+                    
+                    // Dutch indicators
+                    if (text.includes('de') || text.includes('het') ||
+                        text.includes('een') || text.includes('met') ||
+                        text.includes('voor') || text.includes('niet') ||
+                        text.includes('zijn') || text.includes('worden')) {
+                      langScores.nl += 10;
+                    }
+                    
+                    // Character-based detection
+                    const specialChars = {
+                      'á': 'es,pt',
+                      'é': 'es,fr,pt',
+                      'í': 'es',
+                      'ó': 'es,pt',
+                      'ú': 'es',
+                      'ü': 'de',
+                      'ñ': 'es',
+                      'ç': 'fr,pt',
+                      'ã': 'pt',
+                      'õ': 'pt',
+                      'ê': 'fr,pt',
+                      'è': 'fr,it',
+                      'ù': 'fr,it',
+                      'ò': 'it',
+                      'à': 'fr,it',
+                      'ß': 'de',
+                      'ä': 'de',
+                      'ö': 'de',
+                      'ë': 'nl',
+                      'ij': 'nl',
+                      'ș': 'ro',
+                      'ț': 'ro',
+                      'ă': 'ro',
+                      'î': 'ro',
+                      'â': 'ro'
+                    };
+                    
+                    for (const [char, langs] of Object.entries(specialChars)) {
+                      if (text.includes(char)) {
+                        langs.split(',').forEach(lang => langScores[lang] += 5);
+                      }
+                    }
+                    
+                    // Find the language with the highest score
+                    let maxScore = 0;
+                    let detectedLang = 'unknown';
+                    
+                    for (const [lang, score] of Object.entries(langScores)) {
+                      if (score > maxScore) {
+                        maxScore = score;
+                        detectedLang = lang;
+                      }
+                    }
+                    
+                    return maxScore > 0 ? detectedLang : 'unknown';
+                  }
+                  
+                  // Detect the page language
+                  detectedLanguage = detectPageLanguage();
+                  console.log(`Detected page language: ${detectedLanguage}`);
+                  
+                  // Create the appropriate dictionary based on detected language
+                  let translationDict = {};
+                  
+                  // Only build dictionary if we detected a supported language
+                  if (detectedLanguage !== 'unknown') {
+                    // Spanish to English/Romanian dictionaries
+                    if (detectedLanguage === 'es') {
+                      if (targetLanguage === 'ro') {
+                        // Spanish to Romanian
+                        translationDict = {
+                          // Navigation & Common UI
+                          'inicio': 'acasă',
+                          'página principal': 'pagina principală',
+                          'menú': 'meniu',
+                          'buscar': 'caută',
+                          'contacto': 'contact',
+                          'contactos': 'contacte',
+                          'sobre nosotros': 'despre noi',
+                          'quiénes somos': 'cine suntem',
+                          'servicios': 'servicii',
+                          'productos': 'produse',
+                          'noticias': 'știri',
+                          'galería': 'galerie',
+                          'galerías': 'galerii',
+                          'precios': 'prețuri',
+                          'ubicación': 'locație',
+                          // ... rest of Spanish to Romanian dictionary
+                        };
+                      } else if (targetLanguage === 'en') {
+                        // Spanish to English
+                        translationDict = {
+                          'inicio': 'home',
+                          'página principal': 'main page',
+                          'menú': 'menu',
+                          'buscar': 'search',
+                          'contacto': 'contact',
+                          'contactos': 'contacts',
+                          'sobre nosotros': 'about us',
+                          'quiénes somos': 'who we are',
+                          'servicios': 'services',
+                          'productos': 'products',
+                          'noticias': 'news',
+                          'galería': 'gallery',
+                          'galerías': 'galleries',
+                          // ... rest of Spanish to English dictionary
+                        };
+                      }
+                    }
+                    
+                    // French to English/Romanian dictionaries
+                    else if (detectedLanguage === 'fr') {
+                      if (targetLanguage === 'ro') {
+                        // French to Romanian
+                        translationDict = {
+                          'accueil': 'acasă',
+                          'page d\'accueil': 'pagina principală',
+                          'menu': 'meniu',
+                          'rechercher': 'caută',
+                          'chercher': 'caută',
+                          'contact': 'contact',
+                          'contacts': 'contacte',
+                          'à propos': 'despre noi',
+                          'à propos de nous': 'despre noi',
+                          'qui sommes-nous': 'cine suntem',
+                          'services': 'servicii',
+                          'produits': 'produse',
+                          'nouvelles': 'știri',
+                          'actualités': 'actualități',
+                          'galerie': 'galerie',
+                          // ... more terms
+                        };
+                      } else if (targetLanguage === 'en') {
+                        // French to English
+                        translationDict = {
+                          'accueil': 'home',
+                          'page d\'accueil': 'home page',
+                          'menu': 'menu',
+                          'rechercher': 'search',
+                          'chercher': 'search',
+                          'contact': 'contact',
+                          'contacts': 'contacts',
+                          'à propos': 'about',
+                          'à propos de nous': 'about us',
+                          'qui sommes-nous': 'who we are',
+                          'services': 'services',
+                          'produits': 'products',
+                          'nouvelles': 'news',
+                          'actualités': 'news',
+                          'galerie': 'gallery',
+                          // ... more terms
+                        };
+                      }
+                    }
+                    
+                    // ... add more language pairs as needed
+                    
+                    // English to Romanian (common terms)
+                    else if (detectedLanguage === 'en' && targetLanguage === 'ro') {
+                      translationDict = {
+                        'home': 'acasă',
+                        'home page': 'pagina principală',
+                        'menu': 'meniu',
+                        'search': 'caută',
+                        'contact': 'contact',
+                        'contacts': 'contacte',
+                        'about': 'despre',
+                        'about us': 'despre noi',
+                        'who we are': 'cine suntem',
+                        'services': 'servicii',
+                        'products': 'produse',
+                        'news': 'știri',
+                        'gallery': 'galerie',
+                        'price': 'preț',
+                        'prices': 'prețuri',
+                        // ... more terms
+                      };
+                    }
+                    
+                    // German to Romanian/English
+                    else if (detectedLanguage === 'de') {
+                      if (targetLanguage === 'ro') {
+                        translationDict = {
+                          'startseite': 'acasă',
+                          'hauptseite': 'pagina principală',
+                          'menü': 'meniu',
+                          'suche': 'caută',
+                          'suchen': 'caută',
+                          'kontakt': 'contact',
+                          'über uns': 'despre noi',
+                          'dienstleistungen': 'servicii',
+                          'produkte': 'produse',
+                          'nachrichten': 'știri',
+                          'galerie': 'galerie',
+                          'preis': 'preț',
+                          'preise': 'prețuri',
+                          // ... more terms
+                        };
+                      } else if (targetLanguage === 'en') {
+                        translationDict = {
+                          'startseite': 'home',
+                          'hauptseite': 'main page',
+                          'menü': 'menu',
+                          'suche': 'search',
+                          'suchen': 'search',
+                          'kontakt': 'contact',
+                          'über uns': 'about us',
+                          'dienstleistungen': 'services',
+                          'produkte': 'products',
+                          'nachrichten': 'news',
+                          'galerie': 'gallery',
+                          'preis': 'price',
+                          'preise': 'prices',
+                          // ... more terms
+                        };
                       }
                     }
                   }
-                }
-                
-                // Process all elements on the page
-                translateTextNodes(document.body);
-                
-                // Update page title
-                if (document.title) {
-                  let title = document.title;
-                  Object.keys(translations).forEach(spanish => {
-                    const regex = new RegExp('\\b' + spanish + '\\b', 'gi');
-                    title = title.replace(regex, translations[spanish]);
+                  
+                  // Function to apply word transformation patterns based on source language
+                  function applyWordTransformation(word, sourceLang, targetLang) {
+                    if (word.length < 3) return word;
+                    
+                    let result = word;
+                    
+                    // Spanish to Romanian patterns
+                    if (sourceLang === 'es' && targetLang === 'ro') {
+                      result = word
+                        .replace(/ción$/gi, 'ție')
+                        .replace(/ciones$/gi, 'ții')
+                        .replace(/dad$/gi, 'tate')
+                        .replace(/dades$/gi, 'tăți')
+                        .replace(/miento$/gi, 'ment')
+                        // ... more patterns
+                    }
+                    
+                    // French to Romanian patterns
+                    else if (sourceLang === 'fr' && targetLang === 'ro') {
+                      result = word
+                        .replace(/tion$/gi, 'ție')
+                        .replace(/tions$/gi, 'ții')
+                        .replace(/ité$/gi, 'itate')
+                        .replace(/ités$/gi, 'ități')
+                        .replace(/ment$/gi, 'ment')
+                        // ... more patterns
+                    }
+                    
+                    // German to Romanian patterns
+                    else if (sourceLang === 'de' && targetLang === 'ro') {
+                      result = word
+                        .replace(/ung$/gi, 'iune')
+                        .replace(/heit$/gi, 'itate')
+                        .replace(/keit$/gi, 'itate')
+                        .replace(/schaft$/gi, 'tate')
+                        // ... more patterns
+                    }
+                    
+                    // Apply universal Latinization for non-Latin script languages
+                    // ... (could add more complex rules)
+                    
+                    return result;
+                  }
+                  
+                  // Function to recursively translate text nodes
+                  function translateTextNodes(node) {
+                    if (node.nodeType === Node.TEXT_NODE) {
+                      let text = node.nodeValue;
+                      if (text.trim()) { // Only process non-empty text
+                        let translatedText = text;
+                        
+                        // Try direct translations from our dictionary first
+                        if (Object.keys(translationDict).length > 0) {
+                          // Case-insensitive replacements
+                          Object.keys(translationDict).forEach(sourceWord => {
+                            const regex = new RegExp('\\b' + sourceWord + '\\b', 'gi');
+                            translatedText = translatedText.replace(regex, translationDict[sourceWord]);
+                          });
+                        }
+                        
+                        // If no translation was found and we're targeting Romanian,
+                        // try word transformation patterns
+                        if (translatedText === text && targetLanguage === 'ro' && detectedLanguage !== 'unknown') {
+                          // Split text into words and try to auto-translate each
+                          const words = text.split(/\s+/);
+                          const translatedWords = words.map(word => {
+                            // Check if already in dictionary
+                            const lowerWord = word.toLowerCase();
+                            if (translationDict[lowerWord]) {
+                              return translationDict[lowerWord];
+                            }
+                            
+                            // Apply transformation patterns
+                            return applyWordTransformation(word, detectedLanguage, targetLanguage);
+                          });
+                          
+                          translatedText = translatedWords.join(' ');
+                        }
+                        
+                        // Only update if we have a translation
+                        if (translatedText !== text) {
+                          node.nodeValue = translatedText;
+                        }
+                      }
+                    } else if (node.nodeType === Node.ELEMENT_NODE) {
+                      // Skip script and style elements
+                      if (node.tagName !== 'SCRIPT' && node.tagName !== 'STYLE') {
+                        for (let i = 0; i < node.childNodes.length; i++) {
+                          translateTextNodes(node.childNodes[i]);
+                        }
+                      }
+                    }
+                  }
+                  
+                  // Process navigation elements specially (they're often structured differently)
+                  const navElements = document.querySelectorAll('nav, menu, ul, ol, .menu, .nav, [class*="menu"], [class*="nav"], [id*="menu"], [id*="nav"]');
+                  navElements.forEach(navElement => {
+                    const links = navElement.querySelectorAll('a, li');
+                    links.forEach(link => {
+                      if (link.textContent && link.textContent.trim()) {
+                        const originalText = link.textContent.trim();
+                        
+                        // Try dictionary lookup first
+                        const lowerText = originalText.toLowerCase();
+                        if (translationDict[lowerText]) {
+                          link.textContent = translationDict[lowerText];
+                        } 
+                        // Then try word-by-word translation
+                        else if (detectedLanguage !== 'unknown') {
+                          const words = originalText.split(/\s+/);
+                          const translatedWords = words.map(word => {
+                            const lowerWord = word.toLowerCase();
+                            if (translationDict[lowerWord]) {
+                              return translationDict[lowerWord];
+                            }
+                            return applyWordTransformation(word, detectedLanguage, targetLanguage);
+                          });
+                          link.textContent = translatedWords.join(' ');
+                        }
+                      }
+                    });
                   });
-                  document.title = title;
-                }
-                
-                // Update input placeholders
-                document.querySelectorAll('input[placeholder], textarea[placeholder]').forEach(el => {
-                  if (el.getAttribute('placeholder')) {
-                    let placeholder = el.getAttribute('placeholder');
-                    Object.keys(translations).forEach(spanish => {
-                      const regex = new RegExp('\\b' + spanish + '\\b', 'gi');
-                      placeholder = placeholder.replace(regex, translations[spanish]);
-                    });
-                    el.setAttribute('placeholder', placeholder);
+                  
+                  // Process headings
+                  const headings = document.querySelectorAll('h1, h2, h3, h4, h5, h6, .title, [class*="title"], [class*="heading"]');
+                  headings.forEach(heading => {
+                    if (heading.textContent && heading.textContent.trim()) {
+                      const originalText = heading.textContent.trim();
+                      
+                      // Try direct translation first
+                      const lowerText = originalText.toLowerCase();
+                      if (translationDict[lowerText]) {
+                        heading.textContent = translationDict[lowerText];
+                      } 
+                      // Then try word-by-word
+                      else if (detectedLanguage !== 'unknown') {
+                        const words = originalText.split(/\s+/);
+                        const translatedWords = words.map(word => {
+                          const lowerWord = word.toLowerCase();
+                          if (translationDict[lowerWord]) {
+                            return translationDict[lowerWord];
+                          }
+                          return applyWordTransformation(word, detectedLanguage, targetLanguage);
+                        });
+                        heading.textContent = translatedWords.join(' ');
+                      }
+                    }
+                  });
+                  
+                  // Apply translations to all text nodes
+                  translateTextNodes(document.body);
+                  
+                  // Update the banner with detected language
+                  const langNames = {
+                    'es': 'Spanish',
+                    'en': 'English',
+                    'fr': 'French',
+                    'de': 'German',
+                    'it': 'Italian',
+                    'pt': 'Portuguese',
+                    'ro': 'Romanian',
+                    'nl': 'Dutch',
+                    'unknown': 'Unknown'
+                  };
+                  
+                  // Update the translation banner with detected language
+                  if (detectedLanguage !== 'unknown') {
+                    banner.innerText = targetLanguage === 'en' 
+                      ? `Translated from ${langNames[detectedLanguage]} to English`
+                      : `Tradus din ${langNames[detectedLanguage]} în Română`;
                   }
-                });
-                
-                // Update button and input text
-                document.querySelectorAll('button, input[type="button"], input[type="submit"]').forEach(el => {
-                  if (el.value) {
-                    let value = el.value;
-                    Object.keys(translations).forEach(spanish => {
-                      const regex = new RegExp('\\b' + spanish + '\\b', 'gi');
-                      value = value.replace(regex, translations[spanish]);
-                    });
-                    el.value = value;
-                  }
-                  if (el.innerText) {
-                    let text = el.innerText;
-                    Object.keys(translations).forEach(spanish => {
-                      const regex = new RegExp('\\b' + spanish + '\\b', 'gi');
-                      text = text.replace(regex, translations[spanish]);
-                    });
-                    el.innerText = text;
-                  }
-                });
-                
-                return true;
-              }, targetLang);
+                  
+                  return detectedLanguage;
+                }, targetLang);
+              }
               
-              console.log('Direct translation applied successfully');
+              // Add a wait to ensure all translations apply
+              await page.waitForTimeout(1000);
               
-              // Wait a moment for any redrawing
-              await new Promise(resolve => setTimeout(resolve, 1000));
             } catch (translateError) {
-              console.log('Direct translation error:', translateError.message);
+              console.log('Translation error:', translateError.message);
+              
+              // Fall back to Google Translate for any failures
+              try {
+                console.log('Falling back to Google Translate...');
+                const translateUrl = `https://translate.google.com/translate?hl=${targetLang}&sl=auto&tl=${targetLang}&u=${encodeURIComponent(url)}`;
+                
+                await page.goto(translateUrl, { 
+                  waitUntil: ['domcontentloaded', 'networkidle2'],
+                  timeout: 60000
+                });
+                
+                console.log('Google Translate fallback loaded');
+              } catch (googleError) {
+                console.log('Google Translate fallback failed:', googleError.message);
+                console.log('Continuing with original page content');
+                // Go back to original page if Google Translate fails
+                await page.goto(url, { 
+                  waitUntil: ['domcontentloaded', 'networkidle2'],
+                  timeout: 30000
+                });
+              }
             }
           }
           

@@ -319,7 +319,7 @@ if (cluster.isMaster) {
           /rubiconproject\.com/.test(url)
         ) {
           request.abort();
-        }
+        } 
         // Block images only if it's a shop or has too many images
         else if (shouldBlockImages && resourceType === 'image') {
           // Allow critical images like logos
@@ -746,14 +746,14 @@ if (cluster.isMaster) {
 
         possibleBanners.forEach(selector => {
           try {
-            const elements = document.querySelectorAll(selector);
-            elements.forEach(el => {
-              if (el && el.parentNode) {
+          const elements = document.querySelectorAll(selector);
+          elements.forEach(el => {
+            if (el && el.parentNode) {
                 // Check if the element is likely a cookie banner by looking at its content
                 const text = el.textContent.toLowerCase();
                 if (text.includes('cookie') || text.includes('gdpr') || 
                     text.includes('privacy') || text.includes('consent')) {
-                  el.parentNode.removeChild(el);
+              el.parentNode.removeChild(el);
                 }
               }
             });

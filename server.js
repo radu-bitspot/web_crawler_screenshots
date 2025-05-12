@@ -287,6 +287,39 @@ if (cluster.isMaster) {
         ) {
           request.abort();
         } 
+        // Block ad-related content and trackers
+        else if (
+          url.includes('ads') || 
+          url.includes('advert') || 
+          url.includes('banner') ||
+          url.includes('popup') || 
+          url.includes('track') || 
+          url.includes('analytics') ||
+          url.includes('pixel') ||
+          url.includes('campaign') ||
+          url.includes('promo') ||
+          url.includes('doubleclick') ||
+          url.includes('google-analytics') ||
+          url.includes('facebook') ||
+          url.includes('marketing') ||
+          url.includes('adsense') ||
+          url.includes('adnxs') ||
+          url.includes('criteo') ||
+          url.includes('taboola') ||
+          url.includes('outbrain') ||
+          // Common ad domains
+          /google.*\/ads/.test(url) ||
+          /doubleclick\.net/.test(url) ||
+          /adservice\.google/.test(url) ||
+          /analytics\.google\.com/.test(url) ||
+          /facebook\.com\/tr/.test(url) ||
+          /amazon-adsystem\.com/.test(url) ||
+          /adform\.net/.test(url) ||
+          /mathtag\.com/.test(url) ||
+          /rubiconproject\.com/.test(url)
+        ) {
+          request.abort();
+        }
         // Block images only if it's a shop or has too many images
         else if (shouldBlockImages && resourceType === 'image') {
           // Allow critical images like logos
@@ -335,6 +368,9 @@ if (cluster.isMaster) {
 
       // Auto-dismiss cookie popups
       await dismissCookiePopups(capturePage);
+      
+      // Dismiss ad popups and promotional overlays
+      await dismissAdPopups(capturePage);
 
       // If we're not blocking images, wait a bit for them to load
       if (!shouldBlockImages) {
@@ -822,6 +858,178 @@ if (cluster.isMaster) {
     }
   };
 
+  // Helper function to dismiss ad popups and overlays
+  const dismissAdPopups = async (page) => {
+    try {
+      console.log('Attempting to dismiss ad popups and promotional overlays...');
+      
+      // Common selectors for ad popups and promotional overlays
+      const adSelectors = [
+        // Close buttons and icons
+        '.close-button', '.close-icon', '.popup-close', '.ad-close', '.modal-close',
+        'button[aria-label="Close"]', 'button[aria-label="close"]',
+        'button.close', 'span.close', 'a.close',
+        '[class*="close"]', '[id*="close"]',
+        '[class*="dismiss"]', '[id*="dismiss"]',
+        // X buttons (common in ads)
+        'button:has(span:contains("×"))',
+        'span:contains("×")',
+        '[class*="modal"] button',
+        // Common ad and promo popup selectors
+        '.popup', '.modal', '.overlay', '.lightbox',
+        '.ad-container', '.promo-popup', '.newsletter-popup',
+        '.offer-overlay', '.campaign-popup', '.discount-popup',
+        '[class*="popup"]', '[id*="popup"]',
+        '[class*="modal"]', '[id*="modal"]',
+        '[class*="overlay"]', '[id*="overlay"]',
+        // Specific promotional content selectors
+        '[class*="newsletter"]', '[id*="newsletter"]',
+        '[class*="concurs"]', '[id*="concurs"]',  // "concurs" is Romanian for "contest"
+        '[class*="promo"]', '[id*="promo"]',
+        '[class*="discount"]', '[id*="discount"]',
+        '[class*="offer"]', '[id*="offer"]'
+      ];
+      
+      // First try to click on close buttons
+      for (const selector of adSelectors) {
+        try {
+          const closeButtons = await page.$$(selector);
+          if (closeButtons.length > 0) {
+            // Look for elements that look like close buttons (prioritize those with "×" content or specific classes)
+            const prioritizedButtons = await page.evaluate((selector) => {
+              const elements = Array.from(document.querySelectorAll(selector));
+              return elements.map(el => {
+                let score = 0;
+                
+                // Prioritize elements with "×" content
+                if (el.textContent.includes('×')) score += 10;
+                if (el.textContent === '×') score += 5;
+                
+                // Check class names for close-related terms
+                const className = el.className || '';
+                if (/close|dismiss|cancel|shut/i.test(className)) score += 8;
+                if (/popup|modal|dialog/i.test(className)) score += 3;
+                
+                // Check for position - close buttons are often in corners
+                const rect = el.getBoundingClientRect();
+                const style = window.getComputedStyle(el);
+                
+                // Top-right position is common for close buttons
+                if ((rect.top < 100 && rect.right > window.innerWidth - 100) || 
+                    style.position === 'absolute' || style.position === 'fixed') {
+                  score += 5;
+                }
+                
+                // Small elements are often close buttons
+                if (rect.width < 50 && rect.height < 50) score += 3;
+                
+                // Check for visibility and clickability
+                if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
+                  score = -100; // Not visible, don't click
+                }
+                
+                return { el, score };
+              });
+            }, selector);
+            
+            // Sort by score (highest first) and click the best candidate
+            if (prioritizedButtons.length > 0) {
+              const sortedButtons = prioritizedButtons.sort((a, b) => b.score - a.score);
+              if (sortedButtons[0].score > 0) {
+                await closeButtons[0].click();
+                console.log(`Clicked ad popup close button using selector: ${selector}`);
+                await page.waitForTimeout(300);
+                break;
+              }
+            }
+          }
+        } catch (err) {
+          // Ignore errors for individual selectors
+        }
+      }
+      
+      // Try removing ad overlays directly from the DOM
+      await page.evaluate(() => {
+        // Find elements that look like overlays
+        const overlaySelectors = [
+          // Visual characteristics of overlays
+          'div[style*="position:fixed"]',
+          'div[style*="position: fixed"]',
+          'div[style*="z-index: 9"]', // High z-index is common for overlays
+          'div[style*="z-index:9"]',
+          // Common class/id patterns for overlays
+          '[class*="popup"]', '[id*="popup"]',
+          '[class*="modal"]', '[id*="modal"]',
+          '[class*="overlay"]', '[id*="overlay"]',
+          '[class*="lightbox"]', '[id*="lightbox"]',
+          // Promotional content
+          '[class*="promo"]', '[id*="promo"]',
+          '[class*="offer"]', '[id*="offer"]',
+          '[class*="discount"]', '[id*="discount"]',
+          '[class*="newsletter"]', '[id*="newsletter"]',
+          '[class*="concurs"]', '[id*="concurs"]',
+          '[class*="campaign"]', '[id*="campaign"]'
+        ];
+        
+        // Identify and remove elements that match characteristics of ad overlays
+        overlaySelectors.forEach(selector => {
+          try {
+            const elements = document.querySelectorAll(selector);
+            elements.forEach(el => {
+              // Additional checks to ensure it's likely an overlay
+              const style = window.getComputedStyle(el);
+              const isOverlay = style.position === 'fixed' || 
+                               style.position === 'absolute' ||
+                               parseInt(style.zIndex) > 100 ||
+                               el.classList.contains('overlay') ||
+                               el.id.includes('overlay');
+                               
+              // Check if it's taking up significant screen space
+              const rect = el.getBoundingClientRect();
+              const coveringSignificantArea = (rect.width > window.innerWidth * 0.5) || 
+                                             (rect.height > window.innerHeight * 0.5);
+                                             
+              // Remove if it matches overlay characteristics
+              if ((isOverlay || coveringSignificantArea) && el.parentNode) {
+                // Check for promotional content
+                const text = el.textContent.toLowerCase();
+                if (text.includes('promo') || 
+                    text.includes('offer') || 
+                    text.includes('discount') || 
+                    text.includes('subscribe') ||
+                    text.includes('newsletter') ||
+                    text.includes('concurs') ||  // Romanian for "contest"
+                    text.includes('reducere') || // Romanian for "discount"
+                    text.includes('oferta') ||   // Romanian for "offer"
+                    text.includes('câștigă')) {  // Romanian for "win"
+                  el.parentNode.removeChild(el);
+                }
+              }
+            });
+          } catch (e) {
+            // Ignore individual selector errors
+          }
+        });
+        
+        // Remove backdrop/overlay elements that often accompany modals
+        const backdropElements = document.querySelectorAll('.modal-backdrop, .overlay-backdrop, .popup-backdrop, [class*="backdrop"]');
+        backdropElements.forEach(el => {
+          if (el && el.parentNode) {
+            el.parentNode.removeChild(el);
+          }
+        });
+        
+        // Reset body styles that are often modified to prevent scrolling when modals are open
+        document.body.style.overflow = 'auto';
+        document.body.style.position = 'static';
+        document.documentElement.style.overflow = 'auto';
+      });
+      
+    } catch (error) {
+      console.log(`Error while dismissing ad popups: ${error.message}`);
+    }
+  };
+
   // Modified endpoint to accept user and benchmark IDs
   app.post('/api/screenshots', async (req, res) => {
     console.log(`Worker ${process.pid} received POST request to /api/screenshots`);
@@ -1260,7 +1468,7 @@ if (cluster.isMaster) {
           timestamp: stats.mtime.toISOString(),
           domain: domain,
           path: '/',
-          pageType: file.includes('-') ? 'Section' : 'Homepage'
+          pageType: 'Unknown'
         };
         
         screenshotDatabase.addScreenshot(screenshot);

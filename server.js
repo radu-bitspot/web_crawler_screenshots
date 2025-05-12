@@ -756,6 +756,200 @@ if (cluster.isMaster) {
     }
   });
 
+  // New endpoint for base64 screenshots for direct database storage
+  app.post('/api/screenshots-base64', async (req, res) => {
+    console.log(`Worker ${process.pid} received POST request to /api/screenshots-base64`);
+    console.log('Request body:', req.body);
+    
+    const { urls, userId = 1, benchmarkId } = req.body;  // Default userId to 1 if not provided
+
+    // Add additional headers to log
+    console.log('Request headers:', req.headers);
+    console.log(`User ID: ${userId} (${userId ? 'provided' : 'using default'}), Benchmark ID: ${benchmarkId}`);
+
+    // Check if URLs is a single string and split it
+    let urlList = urls;
+    if (typeof urls === 'string') {
+      urlList = urls.split(',').map(url => url.trim());
+    }
+
+    console.log('Processing URL list for base64:', urlList);
+
+    if (!urlList || !Array.isArray(urlList) || urlList.length === 0) {
+      console.log('Invalid input: URL list is empty or invalid');
+      return res.status(400).send({ error: 'Invalid input: URL list is empty or invalid' });
+    }
+
+    // Validate URLs and remove invalid ones
+    const validUrls = urlList.filter(url => {
+      try {
+        new URL(url);
+        return true;
+      } catch (error) {
+        console.error(`Invalid URL skipped: ${url}, Error: ${error.message}`);
+        return false;
+      }
+    });
+
+    console.log('Valid URLs for base64 encoding:', validUrls);
+
+    if (validUrls.length === 0) {
+      console.log('No valid URLs provided');
+      return res.status(400).send({ error: 'No valid URLs provided' });
+    }
+
+    try {
+      const browser = await puppeteer.launch({
+        args: ['--no-sandbox', '--disable-setuid-sandbox']
+      });
+      
+      const screenshots = [];
+      
+      // Process each URL sequentially
+      for (const url of validUrls) {
+        try {
+          console.log(`Taking base64 screenshot of: ${url}`);
+          const page = await browser.newPage();
+          
+          // Configure page to block cookies
+          await page.setCookie(); // Clear any existing cookies
+          await page.evaluateOnNewDocument(() => {
+            // Override the navigator.cookieEnabled property
+            Object.defineProperty(navigator, 'cookieEnabled', {
+              get: () => false,
+              configurable: true
+            });
+            
+            // Block document.cookie
+            Object.defineProperty(document, 'cookie', {
+              get: () => '',
+              set: () => '',
+              configurable: true
+            });
+          });
+          
+          // Go to URL
+          await page.goto(url, { 
+            waitUntil: ['domcontentloaded', 'networkidle2'],
+            timeout: 30000
+          });
+          
+          // Auto-dismiss cookie popups
+          await dismissCookiePopups(page);
+          
+          // Scroll through the page to ensure all content is loaded
+          await page.evaluate(async () => {
+            await new Promise((resolve) => {
+              let totalHeight = 0;
+              const distance = 100;
+              const timer = setInterval(() => {
+                const scrollHeight = document.body.scrollHeight;
+                window.scrollBy(0, distance);
+                totalHeight += distance;
+
+                if (totalHeight >= scrollHeight) {
+                  clearInterval(timer);
+                  window.scrollTo(0, 0);
+                  resolve();
+                }
+              }, 100);
+            });
+          });
+          
+          // Take screenshot as base64
+          console.log('Capturing base64 screenshot...');
+          const screenshotBuffer = await page.screenshot({ fullPage: true });
+          const base64Screenshot = screenshotBuffer.toString('base64');
+          
+          // Extract domain information
+          const urlObj = new URL(url);
+          const domain = urlObj.hostname;
+          
+          // Extract content data for database storage
+          const pageContent = await page.evaluate(() => {
+            const getTextContent = (selector) => {
+              const el = document.querySelector(selector);
+              return el ? el.textContent.trim() : '';
+            };
+            
+            // Try to find relevant content sections
+            const title = document.title;
+            const description = getTextContent('meta[name="description"]') || 
+                               getTextContent('.description') || 
+                               getTextContent('#description');
+            
+            const products = Array.from(document.querySelectorAll('.product, [class*="product"], [id*="product"]'))
+              .map(el => el.textContent.trim())
+              .join('\n');
+              
+            const industry = getTextContent('[class*="industry"], [id*="industry"]') || '';
+            
+            // Extract content from main sections
+            const mainContent = getTextContent('main') || 
+                              getTextContent('#main') || 
+                              getTextContent('.main-content') || 
+                              getTextContent('.content');
+                              
+            // Look for About Us or Profile sections
+            const profile = getTextContent('[class*="about"], [id*="about"], .profile, #profile') || '';
+            
+            // Try to find process information
+            const process = getTextContent('[class*="process"], [id*="process"], [class*="how-we"], [id*="how-we"]') || '';
+            
+            // Identify potential group affiliation
+            const group = getTextContent('[class*="group"], [id*="group"], [class*="parent"], [id*="parent"]') || '';
+            
+            return {
+              title,
+              description,
+              products,
+              industry,
+              mainContent,
+              profile,
+              process,
+              group
+            };
+          });
+          
+          // Add to results
+          screenshots.push({
+            url: url,
+            domain: domain,
+            timestamp: new Date().toISOString(),
+            imageBase64: base64Screenshot,
+            content: pageContent,
+            userId: userId,
+            benchmarkId: benchmarkId
+          });
+          
+          console.log(`Successfully captured base64 screenshot for: ${url}`);
+          await page.close();
+        } catch (error) {
+          console.error(`Error capturing base64 screenshot for ${url}:`, error);
+          // Continue with other URLs even if one fails
+        }
+      }
+      
+      await browser.close();
+      
+      console.log(`Completed base64 screenshots for ${screenshots.length} URLs`);
+      
+      // Return base64 encoded screenshots
+      res.status(200).send({
+        success: true,
+        message: `Captured ${screenshots.length} base64 screenshots`,
+        screenshots: screenshots
+      });
+    } catch (error) {
+      console.error('Error in base64 screenshot processing:', error);
+      res.status(500).send({ 
+        success: false, 
+        error: 'An error occurred while taking screenshots',
+        details: error.message
+      });
+    }
+  });
+
   // ENDPOINT 2: Get screenshots by domain
   app.get('/api/screenshots/:domain', (req, res) => {
     let { domain } = req.params;

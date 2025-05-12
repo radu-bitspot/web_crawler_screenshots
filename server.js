@@ -350,30 +350,53 @@ if (cluster.isMaster) {
 
       // Handle translation if required
       if (targetLang) {
-        // Set interface language to match target language for better results
-        // Use auto for source language by default (Google will detect it)
-        // Simplify the URL construction and include debug info
+        console.log(`Translation requested for ${url} to language: ${targetLang}`);
+        
+        // Construct Google Translate URL with better parameters
+        // Important: 'hl' is the UI language, 'sl' is source language, 'tl' is target language
         targetUrl = `https://translate.google.com/translate?hl=${targetLang}&sl=auto&tl=${targetLang}&u=${encodeURIComponent(url)}`;
         
-        // If we have a specific source language specified, use it
-        if (sourceLang !== 'auto') {
-          targetUrl = `https://translate.google.com/translate?hl=${targetLang}&sl=${sourceLang}&tl=${targetLang}&u=${encodeURIComponent(url)}`;
-        }
-        
-        console.log(`Translation requested: ${url} --> ${targetLang}`);
         console.log(`Using Google Translate URL: ${targetUrl}`);
-      }
-
-      console.log(`Navigating to: ${targetUrl} ${shouldBlockImages ? '(blocking most images)' : ''}`);
-      
-      // Set appropriate timeout and options
-      try {
+        
+        // When loading Google Translate pages, wait longer and be more patient
         await capturePage.goto(targetUrl, { 
           waitUntil: ['domcontentloaded', 'networkidle2'],
-          timeout: 30000 // 30 second timeout
+          timeout: 60000 // 60 second timeout for translations
+        }).catch(err => {
+          console.log(`Warning: Google Translate navigation had an issue: ${err.message}`);
+          console.log('Continuing with capture anyway...');
         });
-      } catch (navigationError) {
-        console.log(`Navigation timed out for ${targetUrl}, continuing with capture anyway...`);
+        
+        // Google Translate might need additional time to fully render
+        console.log('Waiting for Google Translate to fully render...');
+        await capturePage.waitForTimeout(5000);
+        
+        // Sometimes Google Translate shows a consent screen - try to accept it
+        try {
+          const consentButton = await capturePage.$('button[jsname="LgbsSe"]');
+          if (consentButton) {
+            console.log('Found Google consent button, clicking it...');
+            await consentButton.click();
+            await capturePage.waitForTimeout(2000);
+          }
+        } catch (e) {
+          console.log('No consent button found or error clicking it:', e.message);
+        }
+        
+        console.log('Translation page loaded, proceeding with screenshot...');
+      } else {
+        // Regular navigation for non-translated pages
+        console.log(`Navigating to: ${targetUrl} ${shouldBlockImages ? '(blocking most images)' : ''}`);
+        
+        // Set appropriate timeout and options
+        try {
+          await capturePage.goto(targetUrl, { 
+            waitUntil: ['domcontentloaded', 'networkidle2'],
+            timeout: 30000 // 30 second timeout
+          });
+        } catch (navigationError) {
+          console.log(`Navigation timed out for ${targetUrl}, continuing with capture anyway...`);
+        }
       }
 
       // Auto-dismiss cookie popups
@@ -1112,7 +1135,9 @@ if (cluster.isMaster) {
   // Modified endpoint to accept user and benchmark IDs
   app.post('/api/screenshots', async (req, res) => {
     console.log(`Worker ${process.pid} received POST request to /api/screenshots`);
-    console.log('Request body:', req.body);
+    console.log('Request body:', JSON.stringify(req.body, null, 2));
+    console.log('Raw request body:', req.body);
+    console.log('Language value explicitly:', req.body.language);
     
     const { urls, userId = 1, benchmarkId, language } = req.body;  // Just use language parameter
 
@@ -1198,9 +1223,10 @@ if (cluster.isMaster) {
 
     try {
       // Process URLs in parallel with Promise.all
-      const screenshotPromises = validUrls.map(url => 
-        processUrl(url, targetLang, screenshotsDir, userId, benchmarkId, sourceLang)
-      );
+      const screenshotPromises = validUrls.map(url => {
+        console.log(`Processing URL: ${url}, targetLang: ${targetLang}, sourceLang: ${sourceLang}`);
+        return processUrl(url, targetLang, screenshotsDir, userId, benchmarkId, sourceLang);
+      });
       
       // Wait for all screenshots to be taken
       const results = await Promise.all(screenshotPromises);

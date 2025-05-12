@@ -6,6 +6,7 @@ const fs = require('fs');
 const archiver = require('archiver');
 const cluster = require('cluster');
 const os = require('os');
+const fetch = require('node-fetch');
 
 // Determine number of CPU cores to use (leave one core free for OS operations)
 const numCPUs = Math.max(1, os.cpus().length - 1);
@@ -150,7 +151,7 @@ if (cluster.isMaster) {
   };
 
   // Helper function to process a single URL and take a screenshot
-  const processUrl = async (url, targetLang, screenshotsDir) => {
+  const processUrl = async (url, targetLang, screenshotsDir, userId = null, benchmarkId = null) => {
     const browser = await getBrowser();
     
     try {
@@ -407,6 +408,52 @@ if (cluster.isMaster) {
           .replace(/\b\w/g, l => l.toUpperCase());
       }
       
+      // Extract page content for WebSearchData
+      const pageContent = await capturePage.evaluate(() => {
+        const getTextContent = (selector) => {
+          const el = document.querySelector(selector);
+          return el ? el.textContent.trim() : '';
+        };
+        
+        // Try to find relevant content sections
+        const title = document.title;
+        const description = getTextContent('meta[name="description"]') || 
+                           getTextContent('.description') || 
+                           getTextContent('#description');
+        
+        const products = Array.from(document.querySelectorAll('.product, [class*="product"], [id*="product"]'))
+          .map(el => el.textContent.trim())
+          .join('\n');
+          
+        const industry = getTextContent('[class*="industry"], [id*="industry"]') || '';
+        
+        // Extract content from main sections
+        const mainContent = getTextContent('main') || 
+                          getTextContent('#main') || 
+                          getTextContent('.main-content') || 
+                          getTextContent('.content');
+                          
+        // Look for About Us or Profile sections
+        const profile = getTextContent('[class*="about"], [id*="about"], .profile, #profile') || '';
+        
+        // Try to find process information
+        const process = getTextContent('[class*="process"], [id*="process"], [class*="how-we"], [id*="how-we"]') || '';
+        
+        // Identify potential group affiliation
+        const group = getTextContent('[class*="group"], [id*="group"], [class*="parent"], [id*="parent"]') || '';
+        
+        return {
+          title,
+          description,
+          products,
+          industry,
+          mainContent,
+          profile,
+          process,
+          group
+        };
+      });
+      
       // Create screenshot object
       const screenshot = {
         originalUrl: url,
@@ -415,11 +462,21 @@ if (cluster.isMaster) {
         timestamp: new Date().toISOString(),
         domain: domain,
         path: urlObj.pathname || '/',
-        pageType: pageType
+        pageType: pageType,
+        pageContent: pageContent
       };
       
       // Add to database
       screenshotDatabase.addScreenshot(screenshot);
+      
+      // If userId and benchmarkId are provided, send to Django backend
+      if (userId && benchmarkId) {
+        try {
+          await sendScreenshotToDjango(screenshot, userId, benchmarkId);
+        } catch (error) {
+          console.error(`Failed to send screenshot to Django: ${error.message}`);
+        }
+      }
       
       return screenshot;
     } catch (err) {
@@ -523,18 +580,93 @@ if (cluster.isMaster) {
     }
   };
 
-  // ENDPOINT 1: Generate screenshots for URLs
+  // New function to send screenshot data to Django
+  const sendScreenshotToDjango = async (screenshot, userId, benchmarkId) => {
+    const DJANGO_API_URL = 'http://localhost:8000/api'; // Change to match your Django server URL
+    
+    try {
+      // If userId is missing, use default (1)
+      userId = userId || 1;
+      
+      console.log(`Sending screenshot data to Django for user ${userId} and benchmark ${benchmarkId}`);
+      
+      // First, check if there's an existing CompanyData entry with this domain
+      const domainParts = screenshot.domain.split('.');
+      const companyName = domainParts.length > 1 ? domainParts[domainParts.length - 2] : screenshot.domain;
+      
+      // Prepare data for CompanyData model
+      const companyData = {
+        user: userId,
+        benchmark: benchmarkId,
+        company_name: companyName.charAt(0).toUpperCase() + companyName.slice(1), // Capitalize first letter
+        website: screenshot.originalUrl,
+        status: 'Processed'
+      };
+      
+      // Send POST request to create/update CompanyData
+      const companyResponse = await fetch(`${DJANGO_API_URL}/company-data/`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(companyData)
+      });
+      
+      if (!companyResponse.ok) {
+        throw new Error(`Failed to create CompanyData: ${companyResponse.statusText}`);
+      }
+      
+      const company = await companyResponse.json();
+      console.log(`Created/updated CompanyData with ID: ${company.id}`);
+      
+      // Now create WebSearchData with the page content
+      const webSearchData = {
+        company_data: company.id,
+        description: screenshot.pageContent.description || screenshot.pageContent.mainContent.substring(0, 500),
+        industry: screenshot.pageContent.industry,
+        products: screenshot.pageContent.products,
+        process: screenshot.pageContent.process,
+        profile: screenshot.pageContent.profile,
+        group: screenshot.pageContent.group
+      };
+      
+      // Send POST request to create WebSearchData
+      const webSearchResponse = await fetch(`${DJANGO_API_URL}/web-search-data/`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(webSearchData)
+      });
+      
+      if (!webSearchResponse.ok) {
+        throw new Error(`Failed to create WebSearchData: ${webSearchResponse.statusText}`);
+      }
+      
+      console.log(`Successfully sent data to Django for ${screenshot.domain}`);
+      return true;
+    } catch (error) {
+      console.error(`Error sending data to Django: ${error.message}`);
+      throw error;
+    }
+  };
+
+  // Modified endpoint to accept user and benchmark IDs
   app.post('/api/screenshots', async (req, res) => {
     console.log(`Worker ${process.pid} received POST request to /api/screenshots`);
     console.log('Request body:', req.body);
     
-    const { urls } = req.body;
+    const { urls, userId = 1, benchmarkId } = req.body;  // Default userId to 1 if not provided
+
+    // Add additional headers to log
+    console.log('Request headers:', req.headers);
 
     // Retrieve and normalize the 'translate-to-romanian' header value
     const translateHeaderRaw = req.headers['translate-to-romanian'] || '';
     const translateHeader = translateHeaderRaw.trim().toLowerCase();
 
     console.log('translate-to-romanian header:', translateHeader);
+    console.log(`User ID: ${userId} (${userId ? 'provided' : 'using default'}), Benchmark ID: ${benchmarkId}`);
 
     let targetLang = null;
     if (translateHeader === 'true') {
@@ -586,7 +718,7 @@ if (cluster.isMaster) {
     try {
       // Process URLs in parallel with Promise.all
       const screenshotPromises = validUrls.map(url => 
-        processUrl(url, targetLang, screenshotsDir)
+        processUrl(url, targetLang, screenshotsDir, userId, benchmarkId)
       );
       
       // Wait for all screenshots to be taken
@@ -597,10 +729,26 @@ if (cluster.isMaster) {
 
       console.log(`Worker ${process.pid} completed processing ${screenshots.length} screenshots`);
 
-      // Send success response with screenshot info
+      // Get unique domain information from the screenshots
+      const domains = [];
+      const domainSet = new Set();
+      
+      screenshots.forEach(screenshot => {
+        if (!domainSet.has(screenshot.domain)) {
+          domainSet.add(screenshot.domain);
+          domains.push({
+            domain: screenshot.domain,
+            url: `https://${screenshot.domain}`,
+            originalUrl: screenshot.originalUrl
+          });
+        }
+      });
+
+      // Send success response with screenshot info and domain info
       res.status(200).send({
         message: 'Screenshots taken successfully',
-        screenshots: screenshots
+        screenshots: screenshots,
+        domains: domains
       });
     } catch (error) {
       console.error('Error:', error);

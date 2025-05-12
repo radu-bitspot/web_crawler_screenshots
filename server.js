@@ -490,6 +490,8 @@ if (cluster.isMaster) {
   // Helper function to dismiss cookie popups
   const dismissCookiePopups = async (page) => {
     try {
+      console.log('Attempting to dismiss cookie popups...');
+      
       // List of common cookie consent selectors
       const cookieSelectors = [
         // Accept buttons
@@ -503,20 +505,46 @@ if (cluster.isMaster) {
         '.accept-cookies',
         '[aria-label*="accept cookies"i]',
         '[aria-label*="accept all"i]',
+        '[data-testid*="accept"i]',
+        '[data-testid*="cookie"i]',
         // Common specific IDs and classes
         '#onetrust-accept-btn-handler',
         '.CookieConsent__button',
         '#accept-cookie-policy',
         '.cc-accept',
         '.gdpr-banner-button',
+        '.js-accept-cookies',
+        '.js-cookie-accept',
+        // Submit type inputs
+        'input[type="submit"][value*="accept"i]',
+        'input[type="submit"][value*="agree"i]',
         // Dialog dismiss buttons
         'button[id*="close"i]',
         'button[class*="close"i]',
         '.cookie-banner-close',
-        '.cookie-dialog-close'
+        '.cookie-dialog-close',
+        // Buttons with text containing "accept" or "agree"
+        'button:contains("Accept")',
+        'button:contains("Agree")',
+        'button:contains("I agree")',
+        'button:contains("Accept all")',
+        'button:contains("Allow")',
+        // Newer cookie consent approaches
+        '.fc-button.fc-cta-consent',
+        '.fc-button.fc-primary',
+        '.fc-confirm-choices',
+        '.cmplz-accept',
+        // Buttons with data attributes
+        '[data-cookiebanner="accept_button"]',
+        // Very specific selectors for common providers
+        '#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll',
+        '.js-cookieAcceptAll',
+        '[data-gdpr-accept]',
+        '.consent-modal-button[data-action="accept"]',
+        '.consent-button[data-action="accept_all"]'
       ];
 
-      // Try each selector and click if found
+      // Try each selector and click if found in main document
       for (const selector of cookieSelectors) {
         try {
           const elements = await page.$$(selector);
@@ -524,55 +552,198 @@ if (cluster.isMaster) {
             await elements[0].click();
             console.log(`Dismissed cookie popup using selector: ${selector}`);
             // Wait a bit after clicking
-            await page.waitForTimeout(500);
-            // Break after first successful click
-            break;
+            await page.waitForTimeout(300);
           }
         } catch (err) {
           // Ignore errors for individual selectors
         }
       }
 
-      // Also try to remove cookie banners directly from DOM
+      // Try to handle iframes - first get all iframes
+      try {
+        const frames = page.frames();
+        console.log(`Found ${frames.length} frames on the page`);
+        
+        // For each frame, try to dismiss cookie popups
+        for (const frame of frames) {
+          if (frame !== page.mainFrame()) {
+            try {
+              console.log(`Checking frame: ${frame.url()}`);
+              
+              // Skip frames from different origins as they'll throw security errors
+              if (!frame.url() || frame.url().startsWith('about:') || frame.url() === 'about:blank') {
+                console.log('Skipping empty/about:blank frame');
+                continue;
+              }
+              
+              // Try each selector in this frame
+              for (const selector of cookieSelectors) {
+                try {
+                  const frameElements = await frame.$$(selector);
+                  if (frameElements.length > 0) {
+                    await frameElements[0].click();
+                    console.log(`Dismissed cookie popup in iframe using selector: ${selector}`);
+                    await page.waitForTimeout(300);
+                    break; // Break after first successful click in this frame
+                  }
+                } catch (frameErr) {
+                  // Ignore individual selector errors in frames
+                }
+              }
+              
+              // Also try clicking buttons with text containing 'accept' or 'agree'
+              await frame.evaluate(() => {
+                try {
+                  // Get all buttons
+                  const buttons = Array.from(document.querySelectorAll('button'));
+                  // Filter buttons with text containing 'accept' or 'agree' or 'allow'
+                  const acceptButtons = buttons.filter(button => {
+                    const text = button.textContent.toLowerCase();
+                    return text.includes('accept') || text.includes('agree') || text.includes('allow') || text.includes('got it');
+                  });
+                  
+                  // Click the first matching button if any
+                  if (acceptButtons.length > 0) {
+                    acceptButtons[0].click();
+                    return true;
+                  }
+                  return false;
+                } catch (e) {
+                  return false;
+                }
+              }).then(clicked => {
+                if (clicked) console.log('Clicked text-based accept button in iframe');
+              }).catch(() => {
+                // Ignore errors in frame evaluation
+              });
+            } catch (frameErr) {
+              console.log(`Error handling iframe: ${frameErr.message}`);
+            }
+          }
+        }
+      } catch (framesErr) {
+        console.log(`Error getting frames: ${framesErr.message}`);
+      }
+
+      // Advanced approach: use JS evaluation to find and click buttons by text content
+      await page.evaluate(() => {
+        const textPhrases = [
+          'accept all', 'accept cookies', 'i agree', 'agree', 'accept', 
+          'allow all', 'allow cookies', 'allow', 'consent', 'got it', 'okay'
+        ];
+        
+        // Function to check if element text contains any of our phrases
+        const hasAcceptText = (element) => {
+          if (!element || !element.textContent) return false;
+          const text = element.textContent.toLowerCase().trim();
+          return textPhrases.some(phrase => text.includes(phrase));
+        };
+        
+        // Get all clickable elements
+        const clickables = [
+          ...document.querySelectorAll('button'),
+          ...document.querySelectorAll('a[role="button"]'),
+          ...document.querySelectorAll('[role="button"]'),
+          ...document.querySelectorAll('input[type="submit"]'),
+          ...document.querySelectorAll('input[type="button"]')
+        ];
+        
+        // Filter and sort by most likely to be accept buttons
+        const acceptButtons = clickables
+          .filter(el => hasAcceptText(el))
+          .sort((a, b) => {
+            // Prioritize buttons with exact text matches
+            const aText = a.textContent.toLowerCase().trim();
+            const bText = b.textContent.toLowerCase().trim();
+            
+            // Primary sort: exact "accept all cookies" type matches
+            const aExact = aText === 'accept all cookies' || aText === 'accept all';
+            const bExact = bText === 'accept all cookies' || bText === 'accept all';
+            if (aExact && !bExact) return -1;
+            if (!aExact && bExact) return 1;
+            
+            // Secondary sort: shorter text is likely more specific
+            return aText.length - bText.length;
+          });
+        
+        // Click the most promising button
+        if (acceptButtons.length > 0) {
+          acceptButtons[0].click();
+          return true;
+        }
+        
+        return false;
+      }).then(clicked => {
+        if (clicked) console.log('Clicked button with accept text');
+      }).catch(err => {
+        console.log(`Error in text-based button search: ${err.message}`);
+      });
+
+      // Remove cookie banners directly from DOM as a fallback
       await page.evaluate(() => {
         const possibleBanners = [
           // Common banner class names
-          '.cookie-banner',
-          '.cookie-popup',
-          '.cookie-notification',
-          '.cookie-consent',
-          '.cookie-dialog',
-          '.cookie-message',
-          '#cookie-banner',
-          '#cookie-popup',
-          '#cookie-notification',
-          '#cookie-consent',
-          '#cookie-dialog',
-          '[class*="cookie-banner"i]',
-          '[class*="cookie-popup"i]',
-          '[class*="cookie-consent"i]',
-          '[id*="cookie-banner"i]',
-          '[id*="cookie-popup"i]',
-          '[id*="cookie-consent"i]',
+          '.cookie-banner', '.cookie-popup', '.cookie-notification', '.cookie-consent',
+          '.cookie-dialog', '.cookie-message', '#cookie-banner', '#cookie-popup',
+          '#cookie-notification', '#cookie-consent', '#cookie-dialog',
+          '[class*="cookie-banner"i]', '[class*="cookie-popup"i]', '[class*="cookie-consent"i]',
+          '[id*="cookie-banner"i]', '[id*="cookie-popup"i]', '[id*="cookie-consent"i]',
           // GDPR related
-          '.gdpr-banner',
-          '#gdpr-banner',
-          '[class*="gdpr"i][class*="banner"i]',
+          '.gdpr-banner', '#gdpr-banner', '[class*="gdpr"i][class*="banner"i]', 
           '[id*="gdpr"i][id*="banner"i]',
           // Privacy policy banners
-          '.privacy-policy-banner',
-          '#privacy-policy-banner',
-          '[class*="privacy"i][class*="banner"i]',
-          '[id*="privacy"i][id*="banner"i]'
+          '.privacy-policy-banner', '#privacy-policy-banner', '[class*="privacy"i][class*="banner"i]',
+          '[id*="privacy"i][id*="banner"i]',
+          // Common cookie banner implementations
+          '#onetrust-banner-sdk', '#onetrust-consent-sdk',
+          '.truste_box_overlay', '.truste_overlay',
+          '.cc-window', '.cc-banner',
+          '.js-consent-banner', '.js-cookie-banner',
+          '#cookiebanner', '.cookie-law-info-bar',
+          '.cookielaw', '.cookiebar',
+          // Fixed position elements that might be cookie banners
+          'div[style*="position:fixed"][style*="bottom:0"]',
+          'div[style*="position: fixed"][style*="bottom: 0"]',
+          'div[style*="position:fixed"][style*="top:0"]',
+          'div[style*="position: fixed"][style*="top: 0"]'
         ];
 
         possibleBanners.forEach(selector => {
-          const elements = document.querySelectorAll(selector);
-          elements.forEach(el => {
-            if (el && el.parentNode) {
-              el.parentNode.removeChild(el);
-            }
-          });
+          try {
+            const elements = document.querySelectorAll(selector);
+            elements.forEach(el => {
+              if (el && el.parentNode) {
+                // Check if the element is likely a cookie banner by looking at its content
+                const text = el.textContent.toLowerCase();
+                if (text.includes('cookie') || text.includes('gdpr') || 
+                    text.includes('privacy') || text.includes('consent')) {
+                  el.parentNode.removeChild(el);
+                }
+              }
+            });
+          } catch (e) {
+            // Ignore individual selector errors
+          }
+        });
+      });
+      
+      // Final attempt: Try setting cookies directly to avoid banners in the future
+      await page.evaluate(() => {
+        // Set common cookie consent cookies with long expiration
+        const cookieConsents = [
+          'euconsent=1',
+          'CookieConsent=true',
+          'cookieconsent_status=dismiss',
+          'cookie_notice_accepted=true',
+          'cookies_accepted=1',
+          'cookies_policy=accepted'
+        ];
+        
+        const expiryDate = new Date();
+        expiryDate.setFullYear(expiryDate.getFullYear() + 1);
+        
+        cookieConsents.forEach(cookie => {
+          document.cookie = `${cookie}; expires=${expiryDate.toUTCString()}; path=/`;
         });
       });
     } catch (error) {

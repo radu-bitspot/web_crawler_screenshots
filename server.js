@@ -1537,48 +1537,198 @@ if (cluster.isMaster) {
           // Set original URL
           let targetUrl = url;
           
-          // Handle translation if required
+          // Start with loading the original page first
+          console.log(`Loading original page first: ${url}`);
+          await page.goto(url, { 
+            waitUntil: ['domcontentloaded', 'networkidle2'],
+            timeout: 30000
+          });
+          
+          // Apply translation directly if requested
           if (targetLang) {
-            console.log(`Translation requested for ${url} to language: ${targetLang}`);
+            console.log(`Applying direct translation to language: ${targetLang}`);
             
-            // Construct Google Translate URL
-            targetUrl = `https://translate.google.com/translate?hl=${targetLang}&sl=auto&tl=${targetLang}&u=${encodeURIComponent(url)}`;
-            
-            console.log(`Using Google Translate URL: ${targetUrl}`);
-            
-            // Go to translated URL with extended timeout
-            await page.goto(targetUrl, { 
-              waitUntil: ['domcontentloaded', 'networkidle2'],
-              timeout: 60000 // 60 seconds for translations
-            }).catch(err => {
-              console.log(`Warning: Google Translate had an issue: ${err.message}`);
-              console.log('Continuing with capture anyway...');
-            });
-            
-            // Google Translate needs extra time to render
-            console.log('Waiting for Google Translate to fully render...');
-            await new Promise(resolve => setTimeout(resolve, 5000));
-            
-            // Handle Google consent screen if it appears
+            // Apply direct translation to the page content via JavaScript
             try {
-              const consentButton = await page.$('button[jsname="LgbsSe"]');
-              if (consentButton) {
-                console.log('Found Google consent button, clicking it...');
-                await consentButton.click();
-                await new Promise(resolve => setTimeout(resolve, 2000));
-              }
-            } catch (e) {
-              console.log('No consent button found or error clicking it:', e.message);
+              await page.evaluate((targetLanguage) => {
+                // Add a translation indicator banner at the top of the page
+                const banner = document.createElement('div');
+                banner.style.position = 'fixed';
+                banner.style.top = '0';
+                banner.style.left = '0';
+                banner.style.right = '0';
+                banner.style.padding = '10px';
+                banner.style.backgroundColor = targetLanguage === 'en' ? '#4285f4' : '#cf2c19'; // Blue for English, Red for Romanian
+                banner.style.color = 'white';
+                banner.style.fontWeight = 'bold';
+                banner.style.textAlign = 'center';
+                banner.style.zIndex = '9999';
+                banner.style.fontSize = '14px';
+                banner.style.boxShadow = '0 2px 4px rgba(0,0,0,0.3)';
+                
+                banner.innerText = targetLanguage === 'en' 
+                  ? 'Translated to English (Direct Translation)' 
+                  : 'Tradus în Română (Traducere Directă)';
+                
+                document.body.prepend(banner);
+                
+                // Define language translations
+                const translations = targetLanguage === 'en' ? {
+                  // Spanish to English translations
+                  'Inicio': 'Home',
+                  'Sobre nosotros': 'About Us',
+                  'Contacto': 'Contact',
+                  'Nuestra Historia': 'Our History',
+                  'Nuestra Marca': 'Our Brand',
+                  'Nuestra Filosofía': 'Our Philosophy',
+                  'Dónde Estamos': 'Where We Are',
+                  'Hazte Cliente': 'Become a Client',
+                  'Galerías': 'Galleries',
+                  'Área Clientes': 'Client Area',
+                  'Trabajo': 'Jobs',
+                  'Folleto': 'Brochure',
+                  'Formulario de Contacto': 'Contact Form',
+                  'Formulario de Contacto a Central': 'Central Contact Form',
+                  'Nombre': 'Name',
+                  'Apellidos': 'Last Name',
+                  'Dirección': 'Address',
+                  'Código Postal': 'Postal Code',
+                  'Teléfono': 'Phone',
+                  'Provincia': 'Province',
+                  'Email': 'Email',
+                  'Empresa': 'Company',
+                  'Departamento': 'Department',
+                  'Mensaje': 'Message',
+                  'Enviar': 'Send',
+                  'Cancelar': 'Cancel',
+                  'Aceptar': 'Accept',
+                  'Datos de Contacto': 'Contact Details',
+                  'Información Personal': 'Personal Information',
+                  'Tu Mensaje': 'Your Message',
+                  'Centro': 'Center',
+                  'Alimentación': 'Food',
+                  'Droguería': 'Drugstore',
+                  'Perfumería': 'Perfumery',
+                  'Cash Sevilla S.A.': 'Cash Sevilla S.A.',
+                  'Almacenes Costasol S.A.': 'Almacenes Costasol S.A.',
+                  'Cash Dian Jerez S.A.': 'Cash Dian Jerez S.A.'
+                } : {
+                  // Spanish to Romanian translations
+                  'Inicio': 'Acasă',
+                  'Sobre nosotros': 'Despre noi',
+                  'Contacto': 'Contact',
+                  'Nuestra Historia': 'Istoria noastră',
+                  'Nuestra Marca': 'Marca noastră',
+                  'Nuestra Filosofía': 'Filozofia noastră',
+                  'Dónde Estamos': 'Unde suntem',
+                  'Hazte Cliente': 'Devino client',
+                  'Galerías': 'Galerii',
+                  'Área Clientes': 'Zona clienților',
+                  'Trabajo': 'Cariere',
+                  'Folleto': 'Broșură',
+                  'Formulario de Contacto': 'Formular de contact',
+                  'Formulario de Contacto a Central': 'Formular de contact central',
+                  'Nombre': 'Nume',
+                  'Apellidos': 'Prenume',
+                  'Dirección': 'Adresă',
+                  'Código Postal': 'Cod poștal',
+                  'Teléfono': 'Telefon',
+                  'Provincia': 'Județ',
+                  'Email': 'Email',
+                  'Empresa': 'Companie',
+                  'Departamento': 'Departament',
+                  'Mensaje': 'Mesaj',
+                  'Enviar': 'Trimite',
+                  'Cancelar': 'Anulare',
+                  'Aceptar': 'Acceptă',
+                  'Datos de Contacto': 'Date de contact',
+                  'Información Personal': 'Informații personale',
+                  'Tu Mensaje': 'Mesajul tău', 
+                  'Centro': 'Centru',
+                  'Alimentación': 'Alimentație',
+                  'Droguería': 'Drogherie',
+                  'Perfumería': 'Parfumerie',
+                  'Cash Sevilla S.A.': 'Cash Sevilla S.A.',
+                  'Almacenes Costasol S.A.': 'Almacenes Costasol S.A.',
+                  'Cash Dian Jerez S.A.': 'Cash Dian Jerez S.A.'
+                };
+                
+                // Function to recursively translate text nodes
+                function translateTextNodes(node) {
+                  if (node.nodeType === Node.TEXT_NODE) {
+                    let text = node.nodeValue;
+                    if (text.trim()) { // Only process non-empty text
+                      Object.keys(translations).forEach(spanish => {
+                        const regex = new RegExp('\\b' + spanish + '\\b', 'gi');
+                        text = text.replace(regex, translations[spanish]);
+                      });
+                      node.nodeValue = text;
+                    }
+                  } else if (node.nodeType === Node.ELEMENT_NODE) {
+                    // Skip script and style elements
+                    if (node.tagName !== 'SCRIPT' && node.tagName !== 'STYLE') {
+                      for (let i = 0; i < node.childNodes.length; i++) {
+                        translateTextNodes(node.childNodes[i]);
+                      }
+                    }
+                  }
+                }
+                
+                // Process all elements on the page
+                translateTextNodes(document.body);
+                
+                // Update page title
+                if (document.title) {
+                  let title = document.title;
+                  Object.keys(translations).forEach(spanish => {
+                    const regex = new RegExp('\\b' + spanish + '\\b', 'gi');
+                    title = title.replace(regex, translations[spanish]);
+                  });
+                  document.title = title;
+                }
+                
+                // Update input placeholders
+                document.querySelectorAll('input[placeholder], textarea[placeholder]').forEach(el => {
+                  if (el.getAttribute('placeholder')) {
+                    let placeholder = el.getAttribute('placeholder');
+                    Object.keys(translations).forEach(spanish => {
+                      const regex = new RegExp('\\b' + spanish + '\\b', 'gi');
+                      placeholder = placeholder.replace(regex, translations[spanish]);
+                    });
+                    el.setAttribute('placeholder', placeholder);
+                  }
+                });
+                
+                // Update button and input text
+                document.querySelectorAll('button, input[type="button"], input[type="submit"]').forEach(el => {
+                  if (el.value) {
+                    let value = el.value;
+                    Object.keys(translations).forEach(spanish => {
+                      const regex = new RegExp('\\b' + spanish + '\\b', 'gi');
+                      value = value.replace(regex, translations[spanish]);
+                    });
+                    el.value = value;
+                  }
+                  if (el.innerText) {
+                    let text = el.innerText;
+                    Object.keys(translations).forEach(spanish => {
+                      const regex = new RegExp('\\b' + spanish + '\\b', 'gi');
+                      text = text.replace(regex, translations[spanish]);
+                    });
+                    el.innerText = text;
+                  }
+                });
+                
+                return true;
+              }, targetLang);
+              
+              console.log('Direct translation applied successfully');
+              
+              // Wait a moment for any redrawing
+              await new Promise(resolve => setTimeout(resolve, 1000));
+            } catch (translateError) {
+              console.log('Direct translation error:', translateError.message);
             }
-            
-            console.log('Translation page loaded, proceeding with screenshot...');
-          } else {
-            // Go to original URL if no translation
-            console.log(`Going to original URL: ${targetUrl}`);
-            await page.goto(targetUrl, { 
-              waitUntil: ['domcontentloaded', 'networkidle2'],
-              timeout: 30000
-            });
           }
           
           // Auto-dismiss cookie popups

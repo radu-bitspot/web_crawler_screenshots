@@ -15,6 +15,37 @@ const BROWSER_POOL_SIZE = 3; // Maximum number of concurrent browser instances
 let browserPool = [];
 let activeBrowsers = 0;
 
+// Simple in-memory database for screenshots
+const screenshotDatabase = {
+  domains: {},
+  addScreenshot: function(screenshot) {
+    const { domain } = screenshot;
+    if (!this.domains[domain]) {
+      this.domains[domain] = [];
+    }
+    this.domains[domain].push(screenshot);
+
+    // Keep only the most recent N screenshots per domain
+    const maxScreenshotsPerDomain = 5;
+    if (this.domains[domain].length > maxScreenshotsPerDomain) {
+      // Sort by timestamp (newest first)
+      this.domains[domain].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+      // Keep only the most recent ones
+      this.domains[domain] = this.domains[domain].slice(0, maxScreenshotsPerDomain);
+    }
+  },
+  getScreenshotsByDomain: function(domain) {
+    return this.domains[domain] || [];
+  },
+  getAllDomains: function() {
+    return Object.keys(this.domains).map(domain => ({
+      name: domain,
+      screenshots: this.domains[domain],
+      screenshotCount: this.domains[domain].length
+    }));
+  }
+};
+
 // Check if this is the master process
 if (cluster.isMaster) {
   console.log(`Master process ${process.pid} is running`);
@@ -42,35 +73,13 @@ if (cluster.isMaster) {
   app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', '*');
     res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, translate-to-romanian');
     
     if (req.method === 'OPTIONS') {
       return res.status(200).end();
     }
     next();
   });
-
-  // Helper function to parse filename and get path info
-  const parseFilename = (filename) => {
-    try {
-      // Remove 'screenshot-' prefix and '.png' extension
-      const withoutPrefix = filename.replace(/^screenshot-/, '');
-      const withoutTimestamp = withoutPrefix.replace(/-\d{4}-\d{2}.*\.png$/, '');
-      
-      // Split remaining parts by underscore
-      const parts = withoutTimestamp.split('_');
-      const domain = parts[0];
-      
-      // Check if it's homepage (no additional parts) or a section
-      const isHomepage = parts.length === 1;
-      const section = isHomepage ? null : parts[1].replace('_html', '');
-      
-      return { domain, isHomepage, section };
-    } catch (error) {
-      console.error('Error parsing filename:', error);
-      return { domain: 'unknown', isHomepage: true, section: null };
-    }
-  };
 
   // Helper function to sanitize filenames
   const sanitizeFilename = (url) => {
@@ -99,95 +108,8 @@ if (cluster.isMaster) {
     if (sanitized === 'invalid_url') {
       return `screenshot-invalid-url-${Date.now()}.png`;
     }
-    return `screenshot-${sanitized}.png`;
-  };
-
-  // Configuration
-  const config = {
-    maxScreenshotsPerDomain: 5,        // Keep only latest N screenshots per domain
-    maxStorageSize: 500 * 1024 * 1024, // 500MB max storage
-    screenshotRetentionDays: 7         // Keep screenshots for 7 days
-  };
-
-  // Helper function to get directory size
-  const getDirSize = (dirPath) => {
-    let size = 0;
-    const files = fs.readdirSync(dirPath);
-    for (const file of files) {
-      const filePath = path.join(dirPath, file);
-      const stats = fs.statSync(filePath);
-      if (stats.isFile()) {
-        size += stats.size;
-      }
-    }
-    return size;
-  };
-
-  // Helper function to clean up old screenshots
-  const cleanupOldScreenshots = () => {
-    const screenshotsDir = path.join(__dirname, 'screenshots');
-    if (!fs.existsSync(screenshotsDir)) return;
-
-    console.log('Starting screenshots cleanup...');
-    
-    try {
-      const files = fs.readdirSync(screenshotsDir)
-        .filter(file => file.endsWith('.png'))
-        .map(file => ({
-          filename: file,
-          path: path.join(screenshotsDir, file),
-          stats: fs.statSync(path.join(screenshotsDir, file))
-        }))
-        .sort((a, b) => b.stats.mtime.getTime() - a.stats.mtime.getTime());
-
-      // Group screenshots by domain
-      const domainGroups = {};
-      for (const file of files) {
-        const domain = file.filename.split('-')[1]; // Get domain from filename
-        if (!domainGroups[domain]) {
-          domainGroups[domain] = [];
-        }
-        domainGroups[domain].push(file);
-      }
-
-      // Keep only the most recent screenshots per domain
-      for (const domain in domainGroups) {
-        const domainFiles = domainGroups[domain];
-        const filesToRemove = domainFiles.slice(config.maxScreenshotsPerDomain);
-        
-        for (const file of filesToRemove) {
-          console.log(`Removing old file: ${file.filename}`);
-          fs.unlinkSync(file.path);
-        }
-      }
-
-      // Remove files older than retention period
-      const cutoffDate = new Date();
-      cutoffDate.setDate(cutoffDate.getDate() - config.screenshotRetentionDays);
-
-      files.forEach(file => {
-        if (file.stats.mtime.getTime() < cutoffDate.getTime()) {
-          console.log(`Removing expired file: ${file.filename}`);
-          fs.unlinkSync(file.path);
-        }
-      });
-
-      // Check total storage size
-      const totalSize = getDirSize(screenshotsDir);
-      if (totalSize > config.maxStorageSize) {
-        console.log('Storage limit exceeded, removing oldest files...');
-        for (const file of files) {
-          fs.unlinkSync(file.path);
-          if (getDirSize(screenshotsDir) <= config.maxStorageSize) {
-            break;
-          }
-        }
-      }
-
-      console.log('Cleanup completed');
-    } catch (error) {
-      console.error('Error during cleanup:', error);
-    }
+    const timestamp = new Date().toISOString().replace(/:/g, '-').replace(/\..+/, '');
+    return `screenshot-${sanitized}-${timestamp}.png`;
   };
 
   // Helper function to get a browser from the pool or create a new one
@@ -233,6 +155,163 @@ if (cluster.isMaster) {
     
     try {
       const page = await browser.newPage();
+      
+      // Configure page to block cookies
+      await page.setCookie(); // Clear any existing cookies
+      
+      // Try to determine if this is a shopping site from the URL
+      const isLikelyShop = url.toLowerCase().match(/shop|store|cart|product|ecommerce|buy|purchase|mall/);
+      
+      // First load the page with all content to check image count and page type
+      console.log(`Initial page analysis for: ${url}`);
+      
+      try {
+        await page.goto(url, { 
+          waitUntil: 'domcontentloaded',
+          timeout: 5000 // 5 second timeout
+        });
+      } catch (initialError) {
+        // Continue even if timeout, we'll analyze what loaded
+        console.log(`Initial page analysis timed out, but continuing with analysis`);
+      }
+      
+      // Count the images on the page and determine if it's image-heavy
+      const pageAnalysis = await page.evaluate(() => {
+        const images = document.querySelectorAll('img');
+        const imageCount = images.length;
+        
+        // Check if it's a shop by looking for shop-related elements
+        const shopElements = [
+          'add to cart',
+          'add to basket', 
+          'buy now',
+          'checkout',
+          'shopping cart',
+          'price list'
+        ];
+        
+        // More precise shop detection - require multiple strong indicators
+        let shopScore = 0;
+        
+        // Check text content for shop-related terms - these are strong indicators
+        const pageText = document.body.innerText.toLowerCase();
+        shopElements.forEach(term => {
+          if (pageText.includes(term)) {
+            shopScore += 2; // Strong indicators get 2 points
+          }
+        });
+        
+        // These are weaker indicators that might be present on non-shop sites
+        const weakShopTerms = ['product', 'price', 'shop', 'store'];
+        weakShopTerms.forEach(term => {
+          if (pageText.includes(term)) {
+            shopScore += 1; // Weak indicators get 1 point
+          }
+        });
+        
+        // Check for actual purchase functionality
+        const purchaseIndicators = [
+          'form[action*="cart"]', 
+          'form[action*="checkout"]',
+          'input[name*="quantity"]',
+          'button[name*="cart"]',
+          'button[name*="checkout"]',
+          '.woocommerce',
+          '.shopify',
+          '.cart-contents',
+          '.add-to-cart'
+        ];
+        
+        // Strong evidence of e-commerce functionality
+        purchaseIndicators.forEach(selector => {
+          if (document.querySelectorAll(selector).length > 0) {
+            shopScore += 3; // Very strong indicators get 3 points
+          }
+        });
+        
+        // A site is considered a shop if it scores at least 5 points
+        const hasShopElements = shopScore >= 5;
+        
+        return {
+          imageCount,
+          hasShopElements,
+          shopScore
+        };
+      });
+      
+      console.log(`Page analysis: ${pageAnalysis.imageCount} images, ${pageAnalysis.hasShopElements ? 'is a shop (score: ' + pageAnalysis.shopScore + ')' : 'is not a shop (score: ' + pageAnalysis.shopScore + ')'}`);
+      
+      // Determine if we should apply image optimization
+      const shouldBlockImages = 
+        // Only block if it's a shop with high confidence
+        (isLikelyShop && pageAnalysis.shopScore >= 5) || 
+        // Block if it has a lot of images
+        pageAnalysis.imageCount > 100;
+      
+      // Close the analysis page and start fresh
+      await page.close();
+      
+      // Create a new page for the actual screenshot
+      const capturePage = await browser.newPage();
+      
+      // Set up cookie blocking
+      await capturePage.setCookie();
+      await capturePage.evaluateOnNewDocument(() => {
+        // Override the navigator.cookieEnabled property
+        Object.defineProperty(navigator, 'cookieEnabled', {
+          get: () => false,
+          configurable: true
+        });
+        
+        // Block document.cookie
+        Object.defineProperty(document, 'cookie', {
+          get: () => '',
+          set: () => '',
+          configurable: true
+        });
+      });
+      
+      // Set up request interception
+      await capturePage.setRequestInterception(true);
+      capturePage.on('request', (request) => {
+        const url = request.url().toLowerCase();
+        const resourceType = request.resourceType();
+        
+        // Always block cookie-related content
+        if (
+          url.includes('cookie') || 
+          url.includes('consent') || 
+          url.includes('gdpr') ||
+          (resourceType === 'script' && (url.includes('cookie') || url.includes('consent')))
+        ) {
+          request.abort();
+        } 
+        // Block images only if it's a shop or has too many images
+        else if (shouldBlockImages && resourceType === 'image') {
+          // Allow critical images like logos
+          if (url.includes('logo') || url.includes('header') || url.includes('banner')) {
+            request.continue();
+          } else {
+            request.abort();
+          }
+        }
+        // Block heavy resources like videos, large scripts, etc.
+        else if (['media', 'websocket', 'texttrack'].includes(resourceType) ||
+                (resourceType === 'script' && 
+                  (url.includes('google-analytics') || 
+                  url.includes('facebook') || 
+                  url.includes('analytics') || 
+                  url.includes('tracker') || 
+                  url.includes('pixel') ||
+                  url.includes('ads')))
+        ) {
+          request.abort();
+        }
+        else {
+          request.continue();
+        }
+      });
+
       let targetUrl = url;
 
       // Handle translation if required
@@ -241,45 +320,108 @@ if (cluster.isMaster) {
         console.log(`Translated URL: ${targetUrl}`);
       }
 
-      console.log(`Navigating to: ${targetUrl}`);
-      // Wait for the page to load with a longer timeout and multiple conditions
-      await page.goto(targetUrl, { 
-        waitUntil: ['networkidle0', 'domcontentloaded', 'load'],
-        timeout: 60000 
-      });
+      console.log(`Navigating to: ${targetUrl} ${shouldBlockImages ? '(blocking most images)' : ''}`);
       
-      // Additional waiting to ensure page is fully loaded
-      console.log(`Waiting for page to be fully loaded...`);
-      
-      // Wait for any animations or delayed content to finish loading (2 seconds)
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      // Ensure all images and other resources are loaded
-      await page.evaluate(() => {
-        return new Promise((resolve) => {
-          if (document.readyState === 'complete') {
-            return resolve();
-          }
-          window.addEventListener('load', resolve);
+      // Set appropriate timeout and options
+      try {
+        await capturePage.goto(targetUrl, { 
+          waitUntil: ['domcontentloaded', 'networkidle2'],
+          timeout: 30000 // 30 second timeout
+        });
+      } catch (navigationError) {
+        console.log(`Navigation timed out for ${targetUrl}, continuing with capture anyway...`);
+      }
+
+      // Auto-dismiss cookie popups
+      await dismissCookiePopups(capturePage);
+
+      // If we're not blocking images, wait a bit for them to load
+      if (!shouldBlockImages) {
+        console.log(`Waiting for images to load...`);
+        await capturePage.evaluate(() => {
+          return new Promise((resolve) => {
+            // Wait up to 5 seconds for images
+            setTimeout(resolve, 5000);
+            
+            // Check if all visible images are loaded
+            const imageLoaded = () => {
+              const images = Array.from(document.querySelectorAll('img'));
+              const allLoaded = images.every(img => img.complete);
+              if (allLoaded) resolve();
+            };
+            
+            // Check periodically
+            const interval = setInterval(() => {
+              imageLoaded();
+              // After 5 seconds, clear interval regardless
+              setTimeout(() => clearInterval(interval), 5000);
+            }, 500);
+            
+            // Also try with load event
+            window.addEventListener('load', resolve);
+          });
+        });
+      }
+
+      // Scroll through the page to ensure all lazy-loaded content is loaded
+      await capturePage.evaluate(async () => {
+        await new Promise((resolve) => {
+          let totalHeight = 0;
+          const distance = 100;
+          const timer = setInterval(() => {
+            const scrollHeight = document.body.scrollHeight;
+            window.scrollBy(0, distance);
+            totalHeight += distance;
+
+            if (totalHeight >= scrollHeight) {
+              clearInterval(timer);
+              window.scrollTo(0, 0);
+              resolve();
+            }
+          }, 100);
         });
       });
-      
+
       const filename = generateUniqueFilename(url);
       const screenshotPath = path.join(screenshotsDir, filename);
       console.log(`Taking screenshot: ${screenshotPath}`);
-      await page.screenshot({ path: screenshotPath, fullPage: true });
+      await capturePage.screenshot({ path: screenshotPath, fullPage: true });
       console.log(`Screenshot taken for: ${url}`);
       
-      await page.close();
+      // Close page
+      await capturePage.close();
       
-      return {
+      // Extract page type and domain information
+      let pageType = 'Homepage';
+      const urlObj = new URL(url);
+      const domain = urlObj.hostname;
+      
+      if (urlObj.pathname && urlObj.pathname !== '/' && urlObj.pathname !== '') {
+        // Get the last part of the path for a more descriptive name
+        const pathParts = urlObj.pathname.split('/').filter(p => p);
+        pageType = pathParts.length > 0 ? pathParts[pathParts.length - 1] : 'Section';
+        
+        // Capitalize and clean up the page type
+        pageType = pageType
+          .replace(/-/g, ' ')
+          .replace(/\b\w/g, l => l.toUpperCase());
+      }
+      
+      // Create screenshot object
+      const screenshot = {
         originalUrl: url,
         filename: filename,
         screenshotUrl: `/screenshots/${filename}`,
         timestamp: new Date().toISOString(),
-        domain: new URL(url).hostname,
-        path: new URL(url).pathname || '/'
+        domain: domain,
+        path: urlObj.pathname || '/',
+        pageType: pageType
       };
+      
+      // Add to database
+      screenshotDatabase.addScreenshot(screenshot);
+      
+      return screenshot;
     } catch (err) {
       console.error(`Failed to capture screenshot for ${url}: ${err.message}`);
       return null;
@@ -288,12 +430,102 @@ if (cluster.isMaster) {
     }
   };
 
-  // Run cleanup every hour
-  setInterval(cleanupOldScreenshots, 60 * 60 * 1000);
+  // Helper function to dismiss cookie popups
+  const dismissCookiePopups = async (page) => {
+    try {
+      // List of common cookie consent selectors
+      const cookieSelectors = [
+        // Accept buttons
+        'button[id*="accept"i]',
+        'button[class*="accept"i]',
+        'a[id*="accept"i]',
+        'a[class*="accept"i]',
+        'button[id*="cookie"i]',
+        'button[class*="cookie"i]',
+        '.cookie-accept',
+        '.accept-cookies',
+        '[aria-label*="accept cookies"i]',
+        '[aria-label*="accept all"i]',
+        // Common specific IDs and classes
+        '#onetrust-accept-btn-handler',
+        '.CookieConsent__button',
+        '#accept-cookie-policy',
+        '.cc-accept',
+        '.gdpr-banner-button',
+        // Dialog dismiss buttons
+        'button[id*="close"i]',
+        'button[class*="close"i]',
+        '.cookie-banner-close',
+        '.cookie-dialog-close'
+      ];
 
-  // Endpoint to take screenshots
-  app.post('/screenshot', async (req, res) => {
-    console.log(`Worker ${process.pid} received POST request to /screenshot`);
+      // Try each selector and click if found
+      for (const selector of cookieSelectors) {
+        try {
+          const elements = await page.$$(selector);
+          if (elements.length > 0) {
+            await elements[0].click();
+            console.log(`Dismissed cookie popup using selector: ${selector}`);
+            // Wait a bit after clicking
+            await page.waitForTimeout(500);
+            // Break after first successful click
+            break;
+          }
+        } catch (err) {
+          // Ignore errors for individual selectors
+        }
+      }
+
+      // Also try to remove cookie banners directly from DOM
+      await page.evaluate(() => {
+        const possibleBanners = [
+          // Common banner class names
+          '.cookie-banner',
+          '.cookie-popup',
+          '.cookie-notification',
+          '.cookie-consent',
+          '.cookie-dialog',
+          '.cookie-message',
+          '#cookie-banner',
+          '#cookie-popup',
+          '#cookie-notification',
+          '#cookie-consent',
+          '#cookie-dialog',
+          '[class*="cookie-banner"i]',
+          '[class*="cookie-popup"i]',
+          '[class*="cookie-consent"i]',
+          '[id*="cookie-banner"i]',
+          '[id*="cookie-popup"i]',
+          '[id*="cookie-consent"i]',
+          // GDPR related
+          '.gdpr-banner',
+          '#gdpr-banner',
+          '[class*="gdpr"i][class*="banner"i]',
+          '[id*="gdpr"i][id*="banner"i]',
+          // Privacy policy banners
+          '.privacy-policy-banner',
+          '#privacy-policy-banner',
+          '[class*="privacy"i][class*="banner"i]',
+          '[id*="privacy"i][id*="banner"i]'
+        ];
+
+        possibleBanners.forEach(selector => {
+          const elements = document.querySelectorAll(selector);
+          elements.forEach(el => {
+            if (el && el.parentNode) {
+              el.parentNode.removeChild(el);
+            }
+          });
+        });
+      });
+    } catch (error) {
+      console.log(`Error while dismissing cookie popups: ${error.message}`);
+    }
+  };
+
+  // ENDPOINT 1: Generate screenshots for URLs
+  app.post('/api/screenshots', async (req, res) => {
+    console.log(`Worker ${process.pid} received POST request to /api/screenshots`);
     console.log('Request body:', req.body);
     
     const { urls } = req.body;
@@ -352,7 +584,7 @@ if (cluster.isMaster) {
     }
 
     try {
-      // Process URLs in parallel with a concurrency limit
+      // Process URLs in parallel with Promise.all
       const screenshotPromises = validUrls.map(url => 
         processUrl(url, targetLang, screenshotsDir)
       );
@@ -361,26 +593,7 @@ if (cluster.isMaster) {
       const results = await Promise.all(screenshotPromises);
       
       // Filter out null results (failed screenshots)
-      const screenshots = results.filter(result => result !== null).map(result => {
-        // Extract page type information
-        let pageType = 'Homepage';
-        const url = new URL(result.originalUrl);
-        if (url.pathname && url.pathname !== '/' && url.pathname !== '') {
-          // Get the last part of the path for a more descriptive name
-          const pathParts = url.pathname.split('/').filter(p => p);
-          pageType = pathParts.length > 0 ? pathParts[pathParts.length - 1] : 'Section';
-          
-          // Capitalize and clean up the page type
-          pageType = pageType
-            .replace(/-/g, ' ')
-            .replace(/\b\w/g, l => l.toUpperCase());
-        }
-        
-        return {
-          ...result,
-          pageType
-        };
-      });
+      const screenshots = results.filter(result => result !== null);
 
       console.log(`Worker ${process.pid} completed processing ${screenshots.length} screenshots`);
 
@@ -395,8 +608,8 @@ if (cluster.isMaster) {
     }
   });
 
-  // GET endpoint to retrieve screenshots by domain
-  app.get('/screenshot/:domain', (req, res) => {
+  // ENDPOINT 2: Get screenshots by domain
+  app.get('/api/screenshots/:domain', (req, res) => {
     let { domain } = req.params;
     
     if (!domain) {
@@ -413,240 +626,81 @@ if (cluster.isMaster) {
       domain.replace(/^www\./, '')
     ];
 
-    const screenshotsDir = path.join(__dirname, 'screenshots');
+    // Search for screenshots with any of the domain variations
+    let screenshots = [];
+    domainVariations.forEach(variation => {
+      const domainScreenshots = screenshotDatabase.getScreenshotsByDomain(variation);
+      screenshots = [...screenshots, ...domainScreenshots];
+    });
     
-    try {
-      // Get all PNG files in the screenshots directory for any domain variation
-      const files = fs.readdirSync(screenshotsDir)
-        .filter(file => {
-          // Check if filename contains any of the domain variations
-          return file.endsWith('.png') && 
-                 domainVariations.some(variation => file.includes(variation));
-        })
-        .map(file => ({
-          filename: file,
-          url: `/screenshots/${file}`,
-          path: path.join(screenshotsDir, file),
-          stats: fs.statSync(path.join(screenshotsDir, file))
-        }))
-        .sort((a, b) => b.stats.mtime.getTime() - a.stats.mtime.getTime());
+    // Sort by timestamp (newest first)
+    screenshots.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 
-      if (files.length === 0) {
-        // Return more helpful error message with domain variations tried
+    if (screenshots.length === 0) {
+      // Check if there are any screenshots on disk
+      const screenshotsDir = path.join(__dirname, 'screenshots');
+      if (fs.existsSync(screenshotsDir)) {
+        const files = fs.readdirSync(screenshotsDir)
+          .filter(file => {
+            // Check if filename contains any of the domain variations
+            return file.endsWith('.png') && 
+                   domainVariations.some(variation => file.includes(variation));
+          });
+          
+        if (files.length > 0) {
+          // Found screenshots on disk but not in memory database
+          // Create entries for them
+          files.forEach(file => {
+            const stats = fs.statSync(path.join(screenshotsDir, file));
+            const domainMatch = domainVariations.find(v => file.includes(v)) || domain;
+            
+            // Create a screenshot entry and add to database
+            const screenshot = {
+              originalUrl: `https://${domainMatch}`,
+              filename: file,
+              screenshotUrl: `/screenshots/${file}`,
+              timestamp: stats.mtime.toISOString(),
+              domain: domainMatch,
+              path: '/',
+              pageType: 'Unknown'
+            };
+            
+            screenshotDatabase.addScreenshot(screenshot);
+            screenshots.push(screenshot);
+          });
+          
+          // Sort again after adding disk-found screenshots
+          screenshots.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+        }
+      }
+      
+      // If still no screenshots found
+      if (screenshots.length === 0) {
         return res.status(404).send({ 
           error: 'No screenshots found for this domain',
           message: `Tried looking for: ${domainVariations.join(', ')}`,
-          suggestion: 'Try using the exact domain: www.geima.it'
+          suggestion: 'Try using the exact domain name or take a new screenshot first'
         });
       }
-
-      // Return list of screenshots
-      return res.status(200).send({
-        domain: domain,
-        screenshots: files.map(file => {
-          // Extract URL path from filename to determine page type
-          let pageType = 'Homepage';
-          const filenameWithoutPrefix = file.filename.replace(/^screenshot-/, '');
-          
-          // Check if the filename contains a section indicator (has a hyphen after domain)
-          if (filenameWithoutPrefix.includes('-')) {
-            const parts = filenameWithoutPrefix.split('-');
-            if (parts.length > 1) {
-              // Get everything after the first part (domain)
-              const section = parts.slice(1).join('-').replace(/\.png$/, '');
-              
-              // Clean up timestamp if present
-              const sectionWithoutTimestamp = section.replace(/-\d{4}-\d{2}.*$/, '');
-              
-              if (sectionWithoutTimestamp) {
-                // Format the section name nicely
-                pageType = sectionWithoutTimestamp
-                  .replace(/-/g, ' ')
-                  .replace(/\b\w/g, l => l.toUpperCase());
-              }
-            }
-          }
-          
-          return {
-            filename: file.filename,
-            url: file.url,
-            timestamp: file.stats.mtime,
-            pageType: pageType
-          };
-        })
-      });
-    } catch (error) {
-      console.error(`Error retrieving screenshots: ${error}`);
-      res.status(500).send({ error: 'Internal server error' });
     }
+
+    // Return list of screenshots
+    return res.status(200).send({
+      domain: domain,
+      screenshots: screenshots
+    });
   });
 
-  // Endpoint to list all domains with screenshots
-  app.get('/domains', (req, res) => {
-    const screenshotsDir = path.join(__dirname, 'screenshots');
+  // ENDPOINT 3: Get all domains with screenshots
+  app.get('/api/domains', (req, res) => {
+    const domains = screenshotDatabase.getAllDomains();
     
-    try {
-      if (!fs.existsSync(screenshotsDir)) {
-        return res.json({ domains: [] });
-      }
-
-      // Get all PNG files in the screenshots directory
-      const files = fs.readdirSync(screenshotsDir)
-        .filter(file => file.endsWith('.png'))
-        .map(file => ({
-          filename: file,
-          path: path.join(screenshotsDir, file),
-          url: `/screenshots/${file}`,
-          stats: fs.statSync(path.join(screenshotsDir, file))
-        }));
-
-      // Create a map to organize domains, subdomains, and their screenshots
-      const domainMap = {};
-
-      // Process each file to extract domain information and organize screenshots
-      files.forEach(file => {
-        // Use the parseFilename helper function to extract domain
-        const { domain: extractedDomain, isHomepage, section } = parseFilename(file.filename);
-        
-        // Skip if domain extraction failed
-        if (!extractedDomain || extractedDomain === 'unknown') return;
-        
-        // Split the domain by dots to identify parts
-        const parts = extractedDomain.split('.');
-        
-        // Determine if this is a subdomain or main domain
-        let mainDomain, subdomain;
-        
-        if (parts.length >= 2) {
-          // Get the main domain (last two parts, e.g., example.com)
-          mainDomain = parts.slice(-2).join('.');
-          
-          // If there are more than 2 parts, it's a subdomain
-          subdomain = parts.length > 2 ? extractedDomain : null;
-        } else {
-          // Handle single-part domains (rare, but possible in local environments)
-          mainDomain = extractedDomain;
-          subdomain = null;
-        }
-        
-        // Initialize the main domain entry if it doesn't exist
-        if (!domainMap[mainDomain]) {
-          domainMap[mainDomain] = {
-            name: mainDomain,
-            subdomains: [],
-            screenshots: []
-          };
-        }
-        
-        // Extract page type information
-        let pageType = 'Homepage';
-        if (!isHomepage && section) {
-          pageType = section
-            .replace(/-/g, ' ')
-            .replace(/\b\w/g, l => l.toUpperCase());
-        }
-        
-        // Create screenshot object with all relevant information
-        const screenshot = {
-          filename: file.filename,
-          url: file.url,
-          timestamp: file.stats.mtime,
-          pageType: pageType,
-          domain: extractedDomain
-        };
-        
-        // Add screenshot to the main domain
-        domainMap[mainDomain].screenshots.push(screenshot);
-        
-        // If this is a subdomain, add it to the subdomains list if not already there
-        if (subdomain && !domainMap[mainDomain].subdomains.includes(subdomain)) {
-          domainMap[mainDomain].subdomains.push(subdomain);
-        }
-      });
-
-      // Convert map to array for response
-      const domainsWithScreenshots = Object.values(domainMap)
-        // Sort domains alphabetically
-        .sort((a, b) => a.name.localeCompare(b.name))
-        // Sort screenshots by timestamp (newest first)
-        .map(domain => ({
-          ...domain,
-          screenshots: domain.screenshots.sort((a, b) => 
-            new Date(b.timestamp) - new Date(a.timestamp)
-          )
-        }));
-
-      res.json({ domains: domainsWithScreenshots });
-    } catch (error) {
-      console.error('Error getting domains:', error);
-      res.status(500).json({ error: 'Failed to get domains' });
-    }
-  });
-
-  // Endpoint to download all screenshots as ZIP
-  app.get('/download-all', (req, res) => {
-    const screenshotsDir = path.join(__dirname, 'screenshots');
+    // Sort domains alphabetically
+    domains.sort((a, b) => a.name.localeCompare(b.name));
     
-    try {
-      if (!fs.existsSync(screenshotsDir)) {
-        return res.status(404).json({ error: 'No screenshots found' });
-      }
-
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const zipFilename = `screenshots-${timestamp}.zip`;
-      res.attachment(zipFilename);
-      
-      const archive = archiver('zip', { zlib: { level: 9 } });
-      archive.pipe(res);
-
-      const files = fs.readdirSync(screenshotsDir)
-        .filter(file => file.endsWith('.png'));
-
-      // Process each file and add it to the archive
-      files.forEach(file => {
-        const filePath = path.join(screenshotsDir, file);
-        
-        // Extract domain and section from filename
-        const filenameWithoutPrefix = file.replace(/^screenshot-/, '');
-        let domain, section;
-        
-        // Split by hyphen to get domain and section
-        const parts = filenameWithoutPrefix.split('-');
-        domain = parts[0];
-        
-        // Determine if this is a homepage or section page
-        let isHomepage = parts.length === 1;
-        
-        // If there are more parts, it's likely a section page
-        if (!isHomepage) {
-          // Join all parts after the domain, but remove any timestamp
-          section = parts.slice(1).join('-').replace(/\.png$/, '').replace(/-\d{4}-\d{2}.*$/, '');
-          // If section is empty after cleaning, treat as homepage
-          isHomepage = !section;
-        }
-        
-        // Create a nice section name for display
-        const sectionDisplay = section ? section.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) : null;
-        
-        let zipPath;
-        if (isHomepage) {
-          zipPath = `${domain}/index.png`;
-        } else {
-          // Create a more descriptive filename based on the section
-          zipPath = `${domain}/${section}.png`;
-        }
-        
-        console.log(`Adding to archive: ${file} as ${zipPath}`);
-        archive.file(filePath, { name: zipPath });
-      });
-
-      archive.finalize();
-    } catch (error) {
-      console.error('Error creating ZIP archive:', error);
-      if (!res.headersSent) {
-        res.status(500).json({ error: 'Failed to create ZIP archive' });
-      }
-    }
+    res.status(200).send({
+      domains: domains
+    });
   });
 
   // Serve static files from the "screenshots" directory with proper headers
@@ -656,6 +710,57 @@ if (cluster.isMaster) {
       res.setHeader('Content-Disposition', 'inline');
     }
   }));
+
+  // Load existing screenshots into memory on startup
+  const loadExistingScreenshots = () => {
+    const screenshotsDir = path.join(__dirname, 'screenshots');
+    if (!fs.existsSync(screenshotsDir)) {
+      fs.mkdirSync(screenshotsDir);
+      return;
+    }
+    
+    console.log('Loading existing screenshots into memory...');
+    
+    try {
+      const files = fs.readdirSync(screenshotsDir)
+        .filter(file => file.endsWith('.png'));
+        
+      files.forEach(file => {
+        const stats = fs.statSync(path.join(screenshotsDir, file));
+        
+        // Extract domain from filename
+        let domain = 'unknown';
+        try {
+          const match = file.match(/^screenshot-([^-]+)/);
+          if (match && match[1]) {
+            domain = match[1].replace(/_/g, '.');
+          }
+        } catch (err) {
+          console.error(`Error parsing domain from filename ${file}: ${err.message}`);
+        }
+        
+        // Create screenshot entry and add to database
+        const screenshot = {
+          originalUrl: `https://${domain}`,
+          filename: file,
+          screenshotUrl: `/screenshots/${file}`,
+          timestamp: stats.mtime.toISOString(),
+          domain: domain,
+          path: '/',
+          pageType: file.includes('-') ? 'Section' : 'Homepage'
+        };
+        
+        screenshotDatabase.addScreenshot(screenshot);
+      });
+      
+      console.log(`Loaded ${files.length} screenshots into memory`);
+    } catch (error) {
+      console.error('Error loading existing screenshots:', error);
+    }
+  };
+  
+  // Load existing screenshots when server starts
+  loadExistingScreenshots();
 
   app.listen(port, () => {
     console.log(`API listening at http://localhost:${port}`);

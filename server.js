@@ -151,7 +151,7 @@ if (cluster.isMaster) {
   };
 
   // Helper function to process a single URL and take a screenshot
-  const processUrl = async (url, targetLang, screenshotsDir, userId = null, benchmarkId = null) => {
+  const processUrl = async (url, targetLang, screenshotsDir, userId = null, benchmarkId = null, sourceLang = 'auto') => {
     const browser = await getBrowser();
     
     try {
@@ -350,8 +350,9 @@ if (cluster.isMaster) {
 
       // Handle translation if required
       if (targetLang) {
-        targetUrl = `https://translate.google.com/translate?hl=${targetLang}&sl=auto&tl=${targetLang}&u=${encodeURIComponent(url)}`;
-        console.log(`Translated URL: ${targetUrl}`);
+        // Use proper source and target languages for translation
+        targetUrl = `https://translate.google.com/translate?hl=en&sl=${sourceLang}&tl=${targetLang}&u=${encodeURIComponent(url)}`;
+        console.log(`Translated URL: ${targetUrl} (Source: ${sourceLang}, Target: ${targetLang})`);
       }
 
       console.log(`Navigating to: ${targetUrl} ${shouldBlockImages ? '(blocking most images)' : ''}`);
@@ -1104,7 +1105,7 @@ if (cluster.isMaster) {
     console.log(`Worker ${process.pid} received POST request to /api/screenshots`);
     console.log('Request body:', req.body);
     
-    const { urls, userId = 1, benchmarkId, language } = req.body;  // Extract language from request body
+    const { urls, userId = 1, benchmarkId, language } = req.body;  // Just use language parameter
 
     // Add additional headers to log
     console.log('Request headers:', req.headers);
@@ -1118,17 +1119,36 @@ if (cluster.isMaster) {
     console.log(`Language from body: ${language || 'not specified'}`);
 
     let targetLang = null;
+    let sourceLang = 'auto'; // Default source language to 'auto'
     
-    // First check if language is specified in the request body
+    // Handle language parameter with simplified approach
     if (language) {
-      if (language.toLowerCase() === 'ro') {
-        targetLang = 'ro'; // Translate to Romanian
-        console.log('Using Romanian translation based on request body');
+      // Check for specific translation pairs
+      if (language.toLowerCase() === 'ro-en') {
+        // Romanian to English
+        targetLang = 'en';
+        sourceLang = 'ro';
+        console.log('Translating from Romanian to English');
+      } else if (language.toLowerCase() === 'en-ro') {
+        // English to Romanian
+        targetLang = 'ro';
+        sourceLang = 'en';
+        console.log('Translating from English to Romanian');
+      } else if (language.toLowerCase() === 'ro') {
+        // Auto to Romanian
+        targetLang = 'ro';
+        sourceLang = 'auto';
+        console.log('Translating to Romanian (auto-detect source)');
       } else if (language.toLowerCase() === 'en') {
-        targetLang = 'en'; // Translate to English
-        console.log('Using English translation based on request body');
+        // Auto to English
+        targetLang = 'en';
+        sourceLang = 'auto';
+        console.log('Translating to English (auto-detect source)');
       } else {
-        return res.status(400).send({ error: 'Invalid language value. Use "en" for English or "ro" for Romanian.' });
+        return res.status(400).send({ 
+          error: 'Invalid language value.', 
+          message: 'Use "en" for English, "ro" for Romanian, "ro-en" for Romanian to English, or "en-ro" for English to Romanian.'
+        });
       }
     } 
     // If no language in body, fall back to header-based logic
@@ -1183,7 +1203,7 @@ if (cluster.isMaster) {
     try {
       // Process URLs in parallel with Promise.all
       const screenshotPromises = validUrls.map(url => 
-        processUrl(url, targetLang, screenshotsDir, userId, benchmarkId)
+        processUrl(url, targetLang, screenshotsDir, userId, benchmarkId, sourceLang)
       );
       
       // Wait for all screenshots to be taken

@@ -350,9 +350,18 @@ if (cluster.isMaster) {
 
       // Handle translation if required
       if (targetLang) {
-        // Use proper source and target languages for translation
-        targetUrl = `https://translate.google.com/translate?hl=en&sl=${sourceLang}&tl=${targetLang}&u=${encodeURIComponent(url)}`;
-        console.log(`Translated URL: ${targetUrl} (Source: ${sourceLang}, Target: ${targetLang})`);
+        // Set interface language to match target language for better results
+        // Use auto for source language by default (Google will detect it)
+        // Simplify the URL construction and include debug info
+        targetUrl = `https://translate.google.com/translate?hl=${targetLang}&sl=auto&tl=${targetLang}&u=${encodeURIComponent(url)}`;
+        
+        // If we have a specific source language specified, use it
+        if (sourceLang !== 'auto') {
+          targetUrl = `https://translate.google.com/translate?hl=${targetLang}&sl=${sourceLang}&tl=${targetLang}&u=${encodeURIComponent(url)}`;
+        }
+        
+        console.log(`Translation requested: ${url} --> ${targetLang}`);
+        console.log(`Using Google Translate URL: ${targetUrl}`);
       }
 
       console.log(`Navigating to: ${targetUrl} ${shouldBlockImages ? '(blocking most images)' : ''}`);
@@ -1119,35 +1128,22 @@ if (cluster.isMaster) {
     console.log(`Language from body: ${language || 'not specified'}`);
 
     let targetLang = null;
-    let sourceLang = 'auto'; // Default source language to 'auto'
+    let sourceLang = 'auto'; // Always use auto for source language
     
-    // Handle language parameter with simplified approach
+    // Simple language handling - just support direct translation to target language
     if (language) {
-      // Check for specific translation pairs
-      if (language.toLowerCase() === 'ro-en') {
-        // Romanian to English
-        targetLang = 'en';
-        sourceLang = 'ro';
-        console.log('Translating from Romanian to English');
-      } else if (language.toLowerCase() === 'en-ro') {
-        // English to Romanian
+      if (language.toLowerCase() === 'ro') {
+        // Translate to Romanian
         targetLang = 'ro';
-        sourceLang = 'en';
-        console.log('Translating from English to Romanian');
-      } else if (language.toLowerCase() === 'ro') {
-        // Auto to Romanian
-        targetLang = 'ro';
-        sourceLang = 'auto';
-        console.log('Translating to Romanian (auto-detect source)');
+        console.log('Will translate content to Romanian');
       } else if (language.toLowerCase() === 'en') {
-        // Auto to English
+        // Translate to English
         targetLang = 'en';
-        sourceLang = 'auto';
-        console.log('Translating to English (auto-detect source)');
+        console.log('Will translate content to English');
       } else {
         return res.status(400).send({ 
-          error: 'Invalid language value.', 
-          message: 'Use "en" for English, "ro" for Romanian, "ro-en" for Romanian to English, or "en-ro" for English to Romanian.'
+          error: 'Invalid language value', 
+          message: 'Use "en" for English translation or "ro" for Romanian translation'
         });
       }
     } 

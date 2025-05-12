@@ -367,9 +367,9 @@ if (cluster.isMaster) {
           console.log('Continuing with capture anyway...');
         });
         
-        // Google Translate might need additional time to fully render
+        // Google Translate needs extra time to render
         console.log('Waiting for Google Translate to fully render...');
-        await capturePage.waitForTimeout(5000);
+        await new Promise(resolve => setTimeout(resolve, 5000));
         
         // Sometimes Google Translate shows a consent screen - try to accept it
         try {
@@ -377,7 +377,7 @@ if (cluster.isMaster) {
           if (consentButton) {
             console.log('Found Google consent button, clicking it...');
             await consentButton.click();
-            await capturePage.waitForTimeout(2000);
+            await new Promise(resolve => setTimeout(resolve, 2000));
           }
         } catch (e) {
           console.log('No consent button found or error clicking it:', e.message);
@@ -1378,7 +1378,7 @@ if (cluster.isMaster) {
             
             // Google Translate needs extra time to render
             console.log('Waiting for Google Translate to fully render...');
-            await page.waitForTimeout(5000);
+            await new Promise(resolve => setTimeout(resolve, 5000));
             
             // Handle Google consent screen if it appears
             try {
@@ -1386,7 +1386,7 @@ if (cluster.isMaster) {
               if (consentButton) {
                 console.log('Found Google consent button, clicking it...');
                 await consentButton.click();
-                await page.waitForTimeout(2000);
+                await new Promise(resolve => setTimeout(resolve, 2000));
               }
             } catch (e) {
               console.log('No consent button found or error clicking it:', e.message);
@@ -1426,8 +1426,20 @@ if (cluster.isMaster) {
           
           // Take screenshot as base64
           console.log('Capturing base64 screenshot...');
+          
+          // Try to extract current page URL and title to verify translation
+          const pageInfo = await page.evaluate(() => {
+            return {
+              currentUrl: window.location.href,
+              pageTitle: document.title,
+              bodyText: document.body.innerText.slice(0, 200) + '...' // First 200 chars of body
+            };
+          });
+          console.log('Page info before screenshot:', pageInfo);
+          
           const screenshotBuffer = await page.screenshot({ fullPage: true });
           const base64Screenshot = screenshotBuffer.toString('base64');
+          console.log('Screenshot successfully captured with size:', screenshotBuffer.length, 'bytes');
           
           // Extract domain information
           const urlObj = new URL(url);

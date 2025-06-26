@@ -1596,72 +1596,43 @@ if (cluster.isMaster) {
                       // Add more languages as needed
                     };
                     
-                    // Spanish indicators
+                    // Spanish indicators - more extensive list
                     if (text.includes('de la') || text.includes('del') || 
                         text.includes('los') || text.includes('las') ||
                         text.includes('que') || text.includes('con') ||
                         text.includes('para') || text.includes('por') ||
-                        text.includes('cómo') || text.includes('está')) {
-                      langScores.es += 10;
+                        text.includes('cómo') || text.includes('está') ||
+                        text.includes('donde') || text.includes('dónde') ||
+                        text.includes('sobre') || text.includes('nuestra') ||
+                        text.includes('nuestro') || text.includes('todos') ||
+                        text.includes('contacto') || text.includes('inicio')) {
+                      langScores.es += 15;
                     }
                     
                     // English indicators
                     if (text.includes('the') || text.includes('and') ||
                         text.includes('are') || text.includes('that') ||
                         text.includes('for') || text.includes('with') ||
-                        text.includes('was') || text.includes('this')) {
-                      langScores.en += 10;
-                    }
-                    
-                    // French indicators
-                    if (text.includes('les') || text.includes('des') ||
-                        text.includes('dans') || text.includes('pour') ||
-                        text.includes('avec') || text.includes('nous') ||
-                        text.includes('vous') || text.includes('sont')) {
-                      langScores.fr += 10;
-                    }
-                    
-                    // German indicators
-                    if (text.includes('der') || text.includes('die') ||
-                        text.includes('und') || text.includes('mit') ||
-                        text.includes('für') || text.includes('ist') ||
-                        text.includes('von') || text.includes('nicht')) {
-                      langScores.de += 10;
+                        text.includes('was') || text.includes('this') ||
+                        text.includes('who') || text.includes('what') ||
+                        text.includes('where') || text.includes('when') ||
+                        text.includes('our') || text.includes('your') ||
+                        text.includes('their') || text.includes('about')) {
+                      langScores.en += 15;
                     }
                     
                     // Italian indicators
                     if (text.includes('il') || text.includes('la') ||
                         text.includes('della') || text.includes('nella') ||
                         text.includes('sono') || text.includes('questo') ||
-                        text.includes('come') || text.includes('bene')) {
-                      langScores.it += 10;
+                        text.includes('come') || text.includes('bene') ||
+                        text.includes('tutti') || text.includes('molto') ||
+                        text.includes('casa') || text.includes('chi') ||
+                        text.includes('cosa') || text.includes('quando')) {
+                      langScores.it += 15;
                     }
                     
-                    // Portuguese indicators
-                    if (text.includes('da') || text.includes('do') ||
-                        text.includes('os') || text.includes('para') ||
-                        text.includes('com') || text.includes('muito') ||
-                        text.includes('não') || text.includes('você')) {
-                      langScores.pt += 10;
-                    }
-                    
-                    // Romanian indicators
-                    if (text.includes('și') || text.includes('pentru') ||
-                        text.includes('sunt') || text.includes('este') ||
-                        text.includes('acest') || text.includes('acesta') ||
-                        text.includes('mai') || text.includes('dacă')) {
-                      langScores.ro += 10;
-                    }
-                    
-                    // Dutch indicators
-                    if (text.includes('de') || text.includes('het') ||
-                        text.includes('een') || text.includes('met') ||
-                        text.includes('voor') || text.includes('niet') ||
-                        text.includes('zijn') || text.includes('worden')) {
-                      langScores.nl += 10;
-                    }
-                    
-                    // Character-based detection
+                    // Character-based detection (more precise)
                     const specialChars = {
                       'á': 'es,pt',
                       'é': 'es,fr,pt',
@@ -1690,9 +1661,11 @@ if (cluster.isMaster) {
                       'â': 'ro'
                     };
                     
+                    // Count occurrences of special characters for better accuracy
                     for (const [char, langs] of Object.entries(specialChars)) {
-                      if (text.includes(char)) {
-                        langs.split(',').forEach(lang => langScores[lang] += 5);
+                      const count = (text.match(new RegExp(char, 'g')) || []).length;
+                      if (count > 0) {
+                        langs.split(',').forEach(lang => langScores[lang] += count * 3);
                       }
                     }
                     
@@ -1707,7 +1680,7 @@ if (cluster.isMaster) {
                       }
                     }
                     
-                    return maxScore > 0 ? detectedLang : 'unknown';
+                    return maxScore > 5 ? detectedLang : 'unknown';
                   }
                   
                   // Detect the page language
@@ -1720,9 +1693,9 @@ if (cluster.isMaster) {
                   // Only build dictionary if we detected a supported language
                   if (detectedLanguage !== 'unknown') {
                     // Spanish to English/Romanian dictionaries
-                    if (detectedLanguage === 'es') {
+                    if (detectedLanguage === 'es' || detectedLanguage === 'it') {
                       if (targetLanguage === 'ro') {
-                        // Spanish to Romanian
+                        // Spanish/Italian to Romanian
                         translationDict = {
                           // Navigation & Common UI
                           'inicio': 'acasă',
@@ -1740,10 +1713,22 @@ if (cluster.isMaster) {
                           'galerías': 'galerii',
                           'precios': 'prețuri',
                           'ubicación': 'locație',
-                          // ... rest of Spanish to Romanian dictionary
+                          'gran': 'mare',
+                          'surtido': 'sortiment',
+                          'en': 'de',
+                          'las': 'cele',
+                          'mejores': 'mai bune',
+                          'marcas': 'mărci',
+                          'de': 'de',
+                          'alimentación': 'alimentație',
+                          'donde': 'unde',
+                          'estamos': 'suntem',
+                          'hazte': 'devino',
+                          'cliente': 'client'
+                          // ... more terms for Spanish/Italian to Romanian
                         };
                       } else if (targetLanguage === 'en') {
-                        // Spanish to English
+                        // Spanish/Italian to English - expanded dictionary
                         translationDict = {
                           'inicio': 'home',
                           'página principal': 'main page',
@@ -1752,124 +1737,43 @@ if (cluster.isMaster) {
                           'contacto': 'contact',
                           'contactos': 'contacts',
                           'sobre nosotros': 'about us',
+                          'sobre': 'about',
+                          'nosotros': 'us',
                           'quiénes somos': 'who we are',
                           'servicios': 'services',
                           'productos': 'products',
                           'noticias': 'news',
                           'galería': 'gallery',
                           'galerías': 'galleries',
-                          // ... rest of Spanish to English dictionary
+                          'precios': 'prices',
+                          'ubicación': 'location',
+                          'dónde': 'where',
+                          'donde': 'where',
+                          'estamos': 'we are',
+                          'hazte': 'become',
+                          'cliente': 'client',
+                          'gran': 'great',
+                          'surtido': 'assortment',
+                          'en': 'in',
+                          'las': 'the',
+                          'mejores': 'best',
+                          'marcas': 'brands',
+                          'de': 'of',
+                          'alimentación': 'food',
+                          // Italian general terms
+                          'chi siamo': 'who we are',
+                          'contatti': 'contacts',
+                          'dove siamo': 'where we are',
+                          'servizi': 'services',
+                          'prodotti': 'products',
+                          'novità': 'news',
+                          'galleria': 'gallery',
+                          'prezzi': 'prices'
                         };
                       }
                     }
                     
-                    // French to English/Romanian dictionaries
-                    else if (detectedLanguage === 'fr') {
-                      if (targetLanguage === 'ro') {
-                        // French to Romanian
-                        translationDict = {
-                          'accueil': 'acasă',
-                          'page d\'accueil': 'pagina principală',
-                          'menu': 'meniu',
-                          'rechercher': 'caută',
-                          'chercher': 'caută',
-                          'contact': 'contact',
-                          'contacts': 'contacte',
-                          'à propos': 'despre noi',
-                          'à propos de nous': 'despre noi',
-                          'qui sommes-nous': 'cine suntem',
-                          'services': 'servicii',
-                          'produits': 'produse',
-                          'nouvelles': 'știri',
-                          'actualités': 'actualități',
-                          'galerie': 'galerie',
-                          // ... more terms
-                        };
-                      } else if (targetLanguage === 'en') {
-                        // French to English
-                        translationDict = {
-                          'accueil': 'home',
-                          'page d\'accueil': 'home page',
-                          'menu': 'menu',
-                          'rechercher': 'search',
-                          'chercher': 'search',
-                          'contact': 'contact',
-                          'contacts': 'contacts',
-                          'à propos': 'about',
-                          'à propos de nous': 'about us',
-                          'qui sommes-nous': 'who we are',
-                          'services': 'services',
-                          'produits': 'products',
-                          'nouvelles': 'news',
-                          'actualités': 'news',
-                          'galerie': 'gallery',
-                          // ... more terms
-                        };
-                      }
-                    }
-                    
-                    // ... add more language pairs as needed
-                    
-                    // English to Romanian (common terms)
-                    else if (detectedLanguage === 'en' && targetLanguage === 'ro') {
-                      translationDict = {
-                        'home': 'acasă',
-                        'home page': 'pagina principală',
-                        'menu': 'meniu',
-                        'search': 'caută',
-                        'contact': 'contact',
-                        'contacts': 'contacte',
-                        'about': 'despre',
-                        'about us': 'despre noi',
-                        'who we are': 'cine suntem',
-                        'services': 'servicii',
-                        'products': 'produse',
-                        'news': 'știri',
-                        'gallery': 'galerie',
-                        'price': 'preț',
-                        'prices': 'prețuri',
-                        // ... more terms
-                      };
-                    }
-                    
-                    // German to Romanian/English
-                    else if (detectedLanguage === 'de') {
-                      if (targetLanguage === 'ro') {
-                        translationDict = {
-                          'startseite': 'acasă',
-                          'hauptseite': 'pagina principală',
-                          'menü': 'meniu',
-                          'suche': 'caută',
-                          'suchen': 'caută',
-                          'kontakt': 'contact',
-                          'über uns': 'despre noi',
-                          'dienstleistungen': 'servicii',
-                          'produkte': 'produse',
-                          'nachrichten': 'știri',
-                          'galerie': 'galerie',
-                          'preis': 'preț',
-                          'preise': 'prețuri',
-                          // ... more terms
-                        };
-                      } else if (targetLanguage === 'en') {
-                        translationDict = {
-                          'startseite': 'home',
-                          'hauptseite': 'main page',
-                          'menü': 'menu',
-                          'suche': 'search',
-                          'suchen': 'search',
-                          'kontakt': 'contact',
-                          'über uns': 'about us',
-                          'dienstleistungen': 'services',
-                          'produkte': 'products',
-                          'nachrichten': 'news',
-                          'galerie': 'gallery',
-                          'preis': 'price',
-                          'preise': 'prices',
-                          // ... more terms
-                        };
-                      }
-                    }
+                    // Add many more translations for other language pairs...
                   }
                   
                   // Function to apply word transformation patterns based on source language
@@ -1878,40 +1782,31 @@ if (cluster.isMaster) {
                     
                     let result = word;
                     
+                    // Spanish to English patterns
+                    if ((sourceLang === 'es' || sourceLang === 'it') && targetLang === 'en') {
+                      result = word
+                        .replace(/ción$/gi, 'tion')
+                        .replace(/ciones$/gi, 'tions')
+                        .replace(/dad$/gi, 'ty')
+                        .replace(/dades$/gi, 'ties')
+                        .replace(/miento$/gi, 'ment')
+                        .replace(/ar$/gi, '')
+                        .replace(/or$/gi, 'or')
+                        .replace(/dor$/gi, 'tor')
+                        .replace(/ía$/gi, 'y')
+                        .replace(/ido$/gi, 'ed')
+                        .replace(/ado$/gi, 'ed');
+                    }
+                    
                     // Spanish to Romanian patterns
-                    if (sourceLang === 'es' && targetLang === 'ro') {
+                    else if ((sourceLang === 'es' || sourceLang === 'it') && targetLang === 'ro') {
                       result = word
                         .replace(/ción$/gi, 'ție')
                         .replace(/ciones$/gi, 'ții')
                         .replace(/dad$/gi, 'tate')
                         .replace(/dades$/gi, 'tăți')
-                        .replace(/miento$/gi, 'ment')
-                        // ... more patterns
+                        .replace(/miento$/gi, 'ment');
                     }
-                    
-                    // French to Romanian patterns
-                    else if (sourceLang === 'fr' && targetLang === 'ro') {
-                      result = word
-                        .replace(/tion$/gi, 'ție')
-                        .replace(/tions$/gi, 'ții')
-                        .replace(/ité$/gi, 'itate')
-                        .replace(/ités$/gi, 'ități')
-                        .replace(/ment$/gi, 'ment')
-                        // ... more patterns
-                    }
-                    
-                    // German to Romanian patterns
-                    else if (sourceLang === 'de' && targetLang === 'ro') {
-                      result = word
-                        .replace(/ung$/gi, 'iune')
-                        .replace(/heit$/gi, 'itate')
-                        .replace(/keit$/gi, 'itate')
-                        .replace(/schaft$/gi, 'tate')
-                        // ... more patterns
-                    }
-                    
-                    // Apply universal Latinization for non-Latin script languages
-                    // ... (could add more complex rules)
                     
                     return result;
                   }
@@ -1925,16 +1820,27 @@ if (cluster.isMaster) {
                         
                         // Try direct translations from our dictionary first
                         if (Object.keys(translationDict).length > 0) {
-                          // Case-insensitive replacements
+                          // Case-insensitive replacements with word boundaries
                           Object.keys(translationDict).forEach(sourceWord => {
-                            const regex = new RegExp('\\b' + sourceWord + '\\b', 'gi');
-                            translatedText = translatedText.replace(regex, translationDict[sourceWord]);
+                            const escapedWord = sourceWord.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                            const regex = new RegExp('\\b' + escapedWord + '\\b', 'gi');
+                            translatedText = translatedText.replace(regex, match => {
+                              // Preserve original case if possible
+                              if (match === match.toLowerCase()) {
+                                return translationDict[sourceWord].toLowerCase();
+                              } else if (match === match.toUpperCase()) {
+                                return translationDict[sourceWord].toUpperCase();
+                              } else if (match[0] === match[0].toUpperCase()) {
+                                return translationDict[sourceWord].charAt(0).toUpperCase() + 
+                                      translationDict[sourceWord].slice(1);
+                              }
+                              return translationDict[sourceWord];
+                            });
                           });
                         }
                         
-                        // If no translation was found and we're targeting Romanian,
-                        // try word transformation patterns
-                        if (translatedText === text && targetLanguage === 'ro' && detectedLanguage !== 'unknown') {
+                        // If no translation was found, try word transformation patterns
+                        if (translatedText === text && detectedLanguage !== 'unknown') {
                           // Split text into words and try to auto-translate each
                           const words = text.split(/\s+/);
                           const translatedWords = words.map(word => {
@@ -1977,7 +1883,15 @@ if (cluster.isMaster) {
                         // Try dictionary lookup first
                         const lowerText = originalText.toLowerCase();
                         if (translationDict[lowerText]) {
-                          link.textContent = translationDict[lowerText];
+                          // Preserve original capitalization
+                          if (originalText === originalText.toUpperCase()) {
+                            link.textContent = translationDict[lowerText].toUpperCase();
+                          } else if (originalText[0] === originalText[0].toUpperCase()) {
+                            link.textContent = translationDict[lowerText].charAt(0).toUpperCase() + 
+                                             translationDict[lowerText].slice(1);
+                          } else {
+                            link.textContent = translationDict[lowerText];
+                          }
                         } 
                         // Then try word-by-word translation
                         else if (detectedLanguage !== 'unknown') {
@@ -2001,12 +1915,12 @@ if (cluster.isMaster) {
                     if (heading.textContent && heading.textContent.trim()) {
                       const originalText = heading.textContent.trim();
                       
-                      // Try direct translation first
+                      // Try to translate the entire heading first
                       const lowerText = originalText.toLowerCase();
                       if (translationDict[lowerText]) {
                         heading.textContent = translationDict[lowerText];
                       } 
-                      // Then try word-by-word
+                      // Then try word-by-word translation
                       else if (detectedLanguage !== 'unknown') {
                         const words = originalText.split(/\s+/);
                         const translatedWords = words.map(word => {
